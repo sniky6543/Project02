@@ -6,14 +6,14 @@
 
 ---
 
-## 👥 1. 4인 역할 분담 및 책임 영역 (R&R)
+## 👥 1. 4인 역할 분담 및 세부 업무 (R&R)
 
-| 담당자 | 담당 역할 | 핵심 작업 디렉토리 | 주요 기술 스택 및 작업 내용 |
-| :--- | :--- | :--- | :--- |
-| **팀원 1 (Frontend)** | React UI/UX, 화면 인터랙션, 상태 관리, API 연동 | `src/`, `index.html` | • React 18, TypeScript, Tailwind CSS, Vite<br>• 탐색/상세/프로필/북마크 화면 개발 및 API 바인딩 |
-| **팀원 2 (Backend & API)** | REST API 서버 구축, 비즈니스 로직, 인증 | `backend/` | • FastAPI, Pydantic, Uvicorn, Python 3.11+<br>• 정책 검색/상세 API, 프로필 API, CORS 설정 |
-| **팀원 3 (DB & Data)** | 데이터베이스 설계, 공공데이터 수집·정제·적재 | `db/` | • PostgreSQL / Supabase, SQL, ORM<br>• 온통청년 공공데이터 크롤링 및 인덱싱 |
-| **팀원 4 (LLM AI)** | AI 맞춤 추천, 프롬프트 엔지니어링, 챗봇 RAG | `ai/` | • OpenAI, Ollama, OpenRouter API 연동<br>• 개인 프로필 기반 정책 적합도 스코어링 & 사유 생성 |
+| 담당 | 주 역할 | 세부 업무 | 담당 디렉토리 / 주요 파일 | 추천 브랜치 |
+| :---: | :--- | :--- | :--- | :--- |
+| **1번** | **PM + Frontend**<br>*(팀장)* | • 프로젝트 요구사항 정리 및 일정/릴리즈 관리<br>• 화면 설계 및 UI/UX 인터랙션 구현<br>• 사용자 프로필, 정책 목록·탐색, 상세 모달 UI<br>• 캘린더/보드 뷰 및 프론트엔드 API 연동 | `src/`<br>`docs/` | `feat/frontend` |
+| **2번** | **Backend + DB** | • FastAPI 기반 RESTful 서버 API 구축<br>• 사용자 프로필 CRUD 및 즐겨찾기(북마크) 저장 API<br>• 정책 DB 스키마 설계 및 인덱스 관리<br>• 정책 마감 **D-Day 계산** 및 필터링 로직 | `backend/`<br>`db/schema.sql`<br>`db/seeds/` | `feat/backend` |
+| **3번** | **Public API + Data** | • **온통청년(청년센터) 공공 API 연동** 및 데이터 수집<br>• 비정형 텍스트 조건 파싱 및 필드 매핑<br>• 수집 데이터 정규화 (`min_age`, `income` 등 숫자 변환)<br>• DB 적재(Bulk Insert/Upsert) 파이프라인 구축 | `db/`<br>`backend/services/collector/`<br>`db/seeds/` | `feat/db` |
+| **4번** | **AI + Notification** | • 공고문 3줄 핵심 요약 LLM 프롬프트/체인 개발<br>• 사용자 프로필 기반 **맞춤 추천 로직 보조 및 매칭 스코어링**<br>• 마감 임박 정책 맞춤 알림 메시지 생성<br>• 청년 정책 관련 뉴스/트렌드 요약 실험 | `ai/`<br>`ai/client.py`<br>`ai/prompts/`<br>`ai/chains/` | `feat/ai` |
 
 ---
 
@@ -98,10 +98,10 @@ project02/
    - `main`: 배포용 안정 브랜치 (직접 Push 금지)
    - `develop`: 개발 통합 브랜치
    - 기능별 브랜치:
-     - `feat/frontend-{기능명}`
-     - `feat/backend-{기능명}`
-     - `feat/db-{기능명}`
-     - `feat/ai-{기능명}`
+     - `feat/frontend`
+     - `feat/backend`
+     - `feat/db`
+     - `feat/ai`
 2. **Pull Request (PR) 필수**:
    - 작업 완료 후 `develop`으로 PR 생성
    - 최소 1명 이상의 팀원 Review & Approve 후 Merge
