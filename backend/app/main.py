@@ -37,12 +37,11 @@ async def root():
 async def health_check():
     return {"status": "healthy"}
 
-# TODO [팀원 2]: 각 라우터 파일 생성 후 아래 주석을 해제하여 등록하세요.
-# from app.routers import policies, ai, profile, bookmarks
-# app.include_router(policies.router, prefix="/api/policies", tags=["Policies"])
-# app.include_router(ai.router, prefix="/api/ai", tags=["AI"])
-# app.include_router(profile.router, prefix="/api/profile", tags=["Profile"])
-# app.include_router(bookmarks.router, prefix="/api/bookmarks", tags=["Bookmarks"])
+# 라우터 등록
+from app.routers import policies
+
+app.include_router(policies.router, prefix="/policies", tags=["Policies"])
+app.include_router(policies.router, prefix="/api/policies", tags=["Policies (API)"])
 
 if __name__ == "__main__":
     import uvicorn
