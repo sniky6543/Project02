@@ -24,7 +24,8 @@ classDiagram
         +String target_condition
         +String apply_method
         +String apply_url
-        +String period
+        +String period_sdate
+        +String period_edate
     }
 ```
 
@@ -45,7 +46,8 @@ classDiagram
 | **`target_condition`**| `String` | 선택 | 소득, 거주지, 취업상태 등 지원 자격 요건 | `"중위소득 60% 이하 (원가구 100% 이하)"` |
 | **`apply_method`** | `String` | 선택 | 신청 방법 및 접수 절차 | `"복지로 웹사이트 또는 행정복지센터 방문"` |
 | **`apply_url`** | `String` | 선택 | 신청 페이지 바로가기 링크 (URL) | `"https://www.bokjiro.go.kr"` |
-| **`period`** | `String` | 선택 | 신청 가능 기간 또는 사업 수행 기간 | `"20260727 ~ 20260812"`<br>`"상시 접수 / 연중 사업"` |
+| **`period_sdate`** | `String` | 선택 | 정책 신청/시작일 (YYYYMMDD 또는 YYYY-MM-DD, 상시 등) | `"20260727"`, `"2026-07-27"`, `"상시 접수"` |
+| **`period_edate`** | `String` | 선택 | 정책 마감/종료일 (YYYYMMDD 또는 YYYY-MM-DD, 상시/예산소진시 등) | `"20260812"`, `"2026-08-12"`, `"20261231"`, `"연중 사업"` |
 
 ---
 
@@ -56,11 +58,17 @@ classDiagram
 * **카테고리:** `{lclsfNm} > {mclsfNm}` 형태로 조합
 * **기관:** `sprvsnInstCdNm` (주관기관) 우선 매핑, 없을 경우 `operInstCdNm` (운영기관)
 * **연령:** `sprtTrgtMinAge` ~ `sprtTrgtMaxAge` 조합
+* **기간 분리:** 
+  - `period_sdate`: 신청기간(`rqutPrdCn`) 또는 사업기간(`bizPrdCn`)의 시작일 추출
+  - `period_edate`: 신청기간(`rqutPrdCn`) 또는 사업기간(`bizPrdCn`)의 마감/종료일 추출
 
 ### 2) 공공데이터포털 (`data.go.kr` - 복지로/보조금24 등)
 * **ID 생성:** `DATA_GO_` + 3자리 순번 (예: `DATA_GO_001`)
 * **카테고리:** 복지 분야별 분류 (주거, 금융, 일자리, 문화, 교육 등)
 * **주관기관:** 담당 정부 부처명 (보건복지부, 금융위원회, 국토교통부 등)
+* **기간 분리:**
+  - `period_sdate`: 신청/접수 시작일자 (상시인 경우 `"상시 접수"`)
+  - `period_edate`: 마감일자 (연중/예산 소진 시까지 등)
 
 ---
 
@@ -80,7 +88,8 @@ classDiagram
   "target_condition": "해당 연령 청년 대상",
   "apply_method": "(경제캠프) www.econcamp.re.kr 에서 신청접수",
   "apply_url": "https://www.econcamp.re.kr/",
-  "period": "20260727 ~ 20260812"
+  "period_sdate": "20260727",
+  "period_edate": "20260812"
 }
 ```
 
@@ -98,7 +107,8 @@ classDiagram
   "target_condition": "중위소득 60% 이하 (원가구 100% 이하)",
   "apply_method": "복지로 웹사이트 또는 행정복지센터 방문",
   "apply_url": "https://www.bokjiro.go.kr",
-  "period": "상시 접수 / 연중 사업"
+  "period_sdate": "상시 접수",
+  "period_edate": "연중 사업"
 }
 ```
 
@@ -106,13 +116,16 @@ classDiagram
 
 ## 5. 프론트엔드 / 백엔드 활용 권장사항
 
-1. **검색 및 필터링 키워드:**
+1. **검색 및 기간 필터링/정렬:**
    - 카테고리 필터: `category` 앞부분(대분류)을 분리하여 '주거', '금융', '일자리', '교육', '복지' 필터 버튼 구현 가능
    - 연령 맞춤 필터: `target_age`에서 숫자 파싱을 통해 사용자 입력 나이에 맞는 정책 필터링 가능
+   - 마감일순 정렬 및 D-Day 계산: `period_edate` 값을 기준으로 오늘 날짜와 비교하여 D-Day 계산 및 마감임박순 정렬 용이
+   - 캘린더/일정 뷰: `period_sdate`와 `period_edate` 범위를 기반으로 캘린더 내 정책 일정 표시 가능
 2. **UI 카드 컴포넌트 표시:**
    - 카드 상단 뱃지: `category` 및 `source`
    - 카드 제목: `title`
    - 본문 요약: `summary`
+   - 기간 표시: `period_sdate` ~ `period_edate` (예: "2026.07.27 ~ 2026.08.12" 또는 "상시 접수")
    - 하단 버튼: `apply_url` 연결 ("자세히 보기 / 신청하기")
 3. **향후 확장 가능 필드 (추천):**
    - `region`: 지자체/지역별 정책 구분 (`"전국"`, `"서울"`, `"부산"` 등)
