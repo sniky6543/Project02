@@ -5,11 +5,20 @@
 """
 
 import os
+import sys
 import urllib.parse
 import xml.etree.ElementTree as ET
 from typing import Dict, Any, List, Optional
 import requests
 from dotenv import load_dotenv
+
+# Windows 콘솔 인코딩 대응
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 load_dotenv()
 
@@ -162,3 +171,51 @@ class BokjiroClient:
             "servId": serv_id
         }
         return self._request_get(url, params)
+
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("🏛️ [복지로 공공데이터 API 클라이언트 직접 실행 테스트]")
+    print("=" * 70)
+    
+    client = BokjiroClient()
+    if not client.service_key:
+        print("❌ [경고] BOKJIRO_API_KEY 또는 DATA_GO_KR_API_KEY가 .env 파일에 설정되어 있지 않습니다.")
+        sys.exit(1)
+        
+    print(f"🔑 API Key 확인 완료 (Key 길이: {len(client.service_key)}자)")
+    
+    # 1. 중앙부처 청년 복지서비스 목록 조회
+    print("\n🔍 [1] 중앙부처 청년 복지서비스 목록 조회 중 (키워드: '청년', 2건)...")
+    res = client.get_central_welfare_list(search_wrd="청년", life_array="청년", num_of_rows=2)
+    
+    if "error" in res:
+        print(f"❌ 조회 실패: {res['error']}")
+    else:
+        serv_list = res.get("servList", [])
+        if isinstance(serv_list, dict):
+            serv_list = [serv_list]
+        print(f"✅ 총 {len(serv_list)}건 수집 완료:\n")
+        
+        for idx, item in enumerate(serv_list, start=1):
+            serv_id = item.get("servId", "N/A")
+            serv_nm = item.get("servNm", "제목 없음")
+            dept = item.get("jurMnofNm", "부처 미상")
+            outline = item.get("servDgst", "") or item.get("wlfareInfoOutlCn", "")
+            print(f"   [{idx}] {serv_nm} (ID: {serv_id})")
+            print(f"       - 소관부처: {dept}")
+            if outline:
+                print(f"       - 내용: {outline[:80]}...")
+                
+        # 2. 첫 번째 항목 상세 조회
+        if serv_list:
+            target_id = serv_list[0].get("servId")
+            print(f"\n📄 [2] 첫 번째 정책 상세 조회 중 (ID: {target_id})...")
+            detail = client.get_central_welfare_detail(target_id)
+            wanted = detail.get("wantedDtl", detail)
+            print(f"   📌 선정기준: {wanted.get('slctCritCn', 'N/A')[:90]}...")
+            print(f"   🎁 지원내용: {wanted.get('alwServCn', 'N/A')[:90]}...")
+
+    print("\n" + "=" * 70)
+    print("✨ 복지로 API 클라이언트 동작 검증 완료!")
+    print("=" * 70)
