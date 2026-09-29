@@ -1,22 +1,80 @@
-import React, { useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useProfileNickname } from '../utils/profileStorage';
+import { getPolicies } from '../api/supabasePolicies';
+import { PolicyItem, PolicyCategory } from '../types/policy';
+import { usePersonalizedPolicies } from '../utils/policyMatcher';
 
 interface HomeViewProps {
-  onNavigate?: (path: string) => void;
+  onNavigate?: (path: string, policyId?: string) => void;
 }
 
 export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
   const nickname = useProfileNickname('');
   const hasNickname = Boolean(nickname && nickname.trim());
-  
+
+  const [rawPolicies, setRawPolicies] = useState<PolicyItem[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [selectedCategory, setSelectedCategory] = useState<string>('전체');
+
+  // Supabase 실데이터 조회
+  useEffect(() => {
+    async function loadData() {
+      setLoading(true);
+      try {
+        const data = await getPolicies({ limit: 100 });
+        setRawPolicies(data);
+      } catch (err) {
+        console.error('Failed to load policies in HomeView:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadData();
+  }, []);
+
+  // 사용자 프로필 정보 기반: 자격 부합 정책만 선별 (자격 미부합 공고 완전 제외)
+  const { policies, profile, hasProfile } = usePersonalizedPolicies(rawPolicies, true);
+
+  // 카테고리별 개수 계산 (자격 부합 정책 기준)
+  const categoryCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {
+      전체: policies.length,
+      일자리: 0,
+      주거: 0,
+      '교육·직업훈련': 0,
+      '금융·복지·문화': 0,
+      '참여·기반': 0,
+    };
+    policies.forEach((p) => {
+      if (counts[p.category] !== undefined) {
+        counts[p.category] += 1;
+      }
+    });
+    return counts;
+  }, [policies]);
+
+  // 선택된 카테고리 필터링
+  const filteredPolicies = React.useMemo(() => {
+    if (selectedCategory === '전체') return policies;
+    return policies.filter((p) => p.category === selectedCategory);
+  }, [policies, selectedCategory]);
+
+  // 마감 임박 정책 (D-Day가 있거나 상위 3건 - 프로필 매칭 높은 순 우선)
+  const urgentPolicies = React.useMemo(() => {
+    const withDDay = policies.filter((p) => p.dDay);
+    return withDDay.length > 0 ? withDDay.slice(0, 3) : policies.slice(0, 3);
+  }, [policies]);
+
+  // data-path 클릭 이벤트 핸들링
   useEffect(() => {
     const handleDataPath = (e: MouseEvent) => {
       const target = (e.target as HTMLElement).closest('[data-path]');
       if (target) {
         const path = target.getAttribute('data-path');
+        const pId = target.getAttribute('data-policy-id');
         if (path && onNavigate) {
           e.preventDefault();
-          onNavigate(path);
+          onNavigate(path, pId || undefined);
         }
       }
     };
@@ -24,494 +82,438 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
     return () => document.removeEventListener('click', handleDataPath);
   }, [onNavigate]);
 
+  const categories: { key: string; label: string; icon: string; count: number }[] = [
+    { key: '전체', label: '전체', icon: '✨', count: categoryCounts['전체'] || 0 },
+    { key: '일자리', label: '일자리', icon: '💼', count: categoryCounts['일자리'] || 0 },
+    { key: '주거', label: '주거', icon: '🏡', count: categoryCounts['주거'] || 0 },
+    { key: '교육·직업훈련', label: '교육·직업훈련', icon: '🎓', count: categoryCounts['교육·직업훈련'] || 0 },
+    { key: '금융·복지·문화', label: '금융·복지·문화', icon: '🪙', count: categoryCounts['금융·복지·문화'] || 0 },
+    { key: '참여·기반', label: '참여·기반', icon: '💬', count: categoryCounts['참여·기반'] || 0 },
+  ];
 
   return (
-    <main className="flex-1 w-full pt-20 pb-16 bg-[#f8fafc] max-w-[1240px] mx-auto px-4 md:px-8"><div className="flex flex-col w-full space-y-8">
-{/* Top Personalized Hero Widget (Light Pastel Sky-Mint-Cream Gradient Banner) */}
-<div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-sky-100/70 via-indigo-50/50 to-teal-50/70 p-6 md:p-8 border border-sky-200/60 shadow-sm shadow-sky-100/50">
-{/* Soft ambient blurs */}
-<div className="absolute -right-8 -top-10 w-72 h-72 rounded-full bg-teal-200/30 blur-3xl pointer-events-none"></div>
-<div className="absolute left-1/3 -bottom-10 w-64 h-64 rounded-full bg-sky-200/40 blur-3xl pointer-events-none"></div>
-<div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-<div className="space-y-2.5 max-w-2xl">
-<div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/80 border border-sky-200/70 shadow-xs text-sky-800 text-xs font-semibold backdrop-blur-md">
-<span className="flex h-2 w-2 relative"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-teal-500"></span></span>
-<span className="">{hasNickname ? '2025 청년 자립 특별 플랜 분석 완료' : '맞춤 큐레이션을 위한 프로필 설정 안내'}</span>
-</div>
-<h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight leading-snug">
-            {hasNickname ? (
-              <>
-                <span className="text-sky-600">{nickname}</span>님을 위한 맞춤 정책 <span className="text-sky-600 underline decoration-sky-300 decoration-wavy underline-offset-4">18건</span>이 준비되었습니다
-              </>
-            ) : (
-              <>
+    <main className="flex-1 w-full pt-20 pb-16 bg-[#f8fafc] max-w-[1240px] mx-auto px-4 md:px-8">
+      <div className="flex flex-col w-full space-y-8">
+        
+        {/* Top Personalized Hero Widget */}
+        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-sky-100/70 via-indigo-50/50 to-teal-50/70 p-6 md:p-8 border border-sky-200/60 shadow-sm shadow-sky-100/50">
+          <div className="absolute -right-8 -top-10 w-72 h-72 rounded-full bg-teal-200/30 blur-3xl pointer-events-none"></div>
+          <div className="absolute left-1/3 -bottom-10 w-64 h-64 rounded-full bg-sky-200/40 blur-3xl pointer-events-none"></div>
+          
+          <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="space-y-2.5 max-w-2xl">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/80 border border-sky-200/70 shadow-xs text-sky-800 text-xs font-semibold backdrop-blur-md">
+                <span className="flex h-2 w-2 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-teal-500"></span>
+                </span>
+                <span>
+                  {hasProfile
+                    ? `⭐ 내 프로필(${profile.regionCity ? profile.regionCity.slice(0, 2) : '전국'} · ${profile.employmentStatus || '청년'}${profile.interests && profile.interests.length > 0 ? ` · ${profile.interests.join('/')}` : ''}) 자격 일치 정책만 표시 중`
+                    : 'Supabase 실데이터 실시간 동기화 완료'}
+                </span>
+              </div>
+              <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight leading-snug">
+                {hasNickname ? (
+                  <>
+                    <span className="text-sky-600">{nickname}</span>님 자격 맞춤 정책{' '}
+                    <span className="text-sky-600 underline decoration-sky-300 decoration-wavy underline-offset-4">
+                      {policies.length > 0 ? `${policies.length}건` : loading ? '조회중...' : '0건'}
+                    </span>
+                    이 준비되었습니다
+                  </>
+                ) : (
+                  <>
+                    청년나침반에서 수집된{' '}
+                    <span className="text-sky-600 underline decoration-sky-300 decoration-wavy underline-offset-4">
+                      {policies.length > 0 ? `총 ${policies.length}건` : '실시간 정책'}
+                    </span>
+                    의 혜택을 확인해보세요
+                  </>
+                )}
+              </h1>
+              <p className="text-slate-600 text-sm md:text-base leading-relaxed">
+                {hasProfile
+                  ? `[내 정보 설정]에 입력하신 자격 요건(관심분야 ${profile.interests && profile.interests.length > 0 ? `[${profile.interests.join(', ')}]` : '전체'}, ${profile.regionCity || '거주지역'}, ${profile.employmentStatus || '취업상태'})에 부합하는 정책만 선별되었습니다.`
+                  : '온통청년 및 공공데이터포털 복지로 API로부터 수집된 실시간 검증 정책을 편리하게 탐색할 수 있습니다.'}
+              </p>
+            </div>
+
+            {/* Graphic & Metric Badge Card */}
+            <div className="flex items-center gap-4 bg-white/90 backdrop-blur-md rounded-2xl p-4 md:p-5 border border-sky-100 shadow-md shadow-sky-100/60 shrink-0 self-start md:self-auto">
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-100 via-yellow-50 to-orange-100 border border-amber-200 flex items-center justify-center shadow-inner shrink-0">
+                <svg className="w-8 h-8 text-amber-500 drop-shadow-sm" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+                  <rect fill="#FEF3C7" height="12" rx="3" stroke="#F59E0B" width="20" x="2" y="6"></rect>
+                  <circle cx="16" cy="12" fill="#FBBF24" r="2.5" stroke="#D97706"></circle>
+                  <path d="M6 10h3M6 14h2" stroke="#D97706" strokeLinecap="round"></path>
+                </svg>
+              </div>
+              <div className="pr-1">
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${hasProfile ? 'bg-emerald-500' : 'bg-sky-500'}`}></span>
+                  <span className="text-xs font-medium text-slate-500">
+                    {hasProfile ? '자격 부합 필터' : 'DB 실시간 연동'}
+                  </span>
+                </div>
+                <div className="flex items-baseline gap-1">
+                  <span className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight">
+                    {policies.length}
+                  </span>
+                  <span className="text-xs font-bold text-sky-600">
+                    {hasProfile ? `건 / DB ${rawPolicies.length}건` : '건 등록됨'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Quick Category Navigation Filters */}
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none" id="category-tabs">
+            {categories.map((cat) => {
+              const isSelected = selectedCategory === cat.key;
+              return (
                 <button
-                  type="button"
-                  onClick={() => onNavigate?.('profile')}
-                  className="text-sky-600 hover:text-sky-700 underline decoration-sky-300 decoration-wavy underline-offset-4 transition-colors cursor-pointer text-left inline"
+                  key={cat.key}
+                  onClick={() => setSelectedCategory(cat.key)}
+                  className={`inline-flex items-center gap-2 px-4 py-2 rounded-2xl font-semibold text-sm transition-all cursor-pointer shadow-xs ${
+                    isSelected
+                      ? 'bg-sky-600 text-white border border-sky-600 shadow-sm shadow-sky-300/50'
+                      : 'bg-white text-slate-700 hover:bg-sky-50/70 border border-slate-200/80 hover:border-sky-200'
+                  }`}
                 >
-                  프로필을 설정
+                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${
+                    isSelected ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-600'
+                  }`}>
+                    {cat.icon}
+                  </span>
+                  <span>{cat.label} ({cat.count})</span>
                 </button>
-                하고 나만을 위한 맞춤 정책을 확인해보세요
-              </>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center gap-2 text-slate-500 text-xs font-medium bg-white px-3 py-1.5 rounded-full border border-slate-200/70 shadow-xs">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span>Supabase DB 실시간 동기화</span>
+          </div>
+        </div>
+
+        {/* Main Content Layout: 8 cols Policy Cards + 4 cols Side Widgets */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Primary Policy Grid (8 Cols) */}
+          <div className="lg:col-span-8 space-y-6">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                  <span>{hasProfile ? '나의 자격 맞춤 추천 정책' : '추천 핵심 정책'}</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-sky-100 text-sky-700 font-semibold">
+                    {selectedCategory === '전체' ? '전체 분야' : selectedCategory} ({filteredPolicies.length}건)
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-500">
+                  {hasProfile
+                    ? '설정하신 프로필 자격 조건과 일치하는 공고만 엄격히 선별되었습니다'
+                    : '실제 Supabase DB에서 조회된 청년 지원 정책입니다'}
+                </p>
+              </div>
+              <button
+                onClick={() => onNavigate?.('explore')}
+                className="text-xs font-semibold text-sky-600 hover:text-sky-700 flex items-center gap-1 cursor-pointer hover:underline"
+              >
+                전체보기 ({policies.length}) →
+              </button>
+            </div>
+
+            {/* Loading Skeleton */}
+            {loading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {[1, 2, 3, 4].map((n) => (
+                  <div key={n} className="bg-white rounded-2xl p-5 border border-slate-200 animate-pulse space-y-4">
+                    <div className="flex justify-between items-center">
+                      <div className="w-20 h-6 bg-slate-200 rounded-md"></div>
+                      <div className="w-14 h-5 bg-slate-200 rounded-full"></div>
+                    </div>
+                    <div className="w-3/4 h-5 bg-slate-200 rounded"></div>
+                    <div className="w-full h-12 bg-slate-100 rounded"></div>
+                    <div className="w-full h-8 bg-slate-200 rounded-xl mt-4"></div>
+                  </div>
+                ))}
+              </div>
+            ) : filteredPolicies.length === 0 ? (
+              <div className="bg-white rounded-2xl p-12 text-center border border-dashed border-slate-200 text-slate-500 space-y-3">
+                <span className="text-3xl">🔍</span>
+                <p className="text-base font-bold text-slate-800">
+                  {hasProfile
+                    ? `선택하신 [${selectedCategory}] 분야에 설정 자격과 일치하는 정책이 없습니다.`
+                    : '해당 카테고리의 정책이 없습니다.'}
+                </p>
+                <p className="text-xs text-slate-400">
+                  {hasProfile
+                    ? '관심 분야나 연령, 거주지 등 프로필 설정 조건을 조정해보세요.'
+                    : '다른 카테고리를 선택해 보세요.'}
+                </p>
+                {hasProfile && (
+                  <button
+                    onClick={() => onNavigate?.('profile')}
+                    className="mt-2 px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs transition-all shadow-xs cursor-pointer"
+                  >
+                    내 정보 설정 변경하기 →
+                  </button>
+                )}
+              </div>
+            ) : (
+              /* Policy Cards Grid */
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {filteredPolicies.slice(0, 6).map((policy) => {
+                  const badgeBg =
+                    policy.category === '주거'
+                      ? 'bg-rose-50 text-rose-600 border-rose-200'
+                      : policy.category === '일자리'
+                      ? 'bg-amber-50 text-amber-700 border-amber-200'
+                      : policy.category === '교육·직업훈련'
+                      ? 'bg-blue-50 text-blue-700 border-blue-200'
+                      : policy.category === '금융·복지·문화'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-purple-50 text-purple-700 border-purple-200';
+
+                  return (
+                    <div
+                      key={policy.id}
+                      className="bg-white rounded-2xl p-5 border border-sky-100 hover:border-sky-300 shadow-sm hover:shadow-md hover:shadow-sky-100/60 transition-all flex flex-col justify-between group"
+                    >
+                      <div className="space-y-3">
+                        {/* Card Header with Badges */}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold border ${badgeBg}`}>
+                              {policy.category}
+                            </span>
+                            {policy.matchScore && policy.matchScore >= 80 && (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-sky-50 text-sky-700 border border-sky-200">
+                                🎯 {policy.matchScore}% 일치
+                              </span>
+                            )}
+                            <span className="text-[11px] text-slate-400 truncate max-w-[100px]">
+                              {policy.organization}
+                            </span>
+                          </div>
+                          <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                            policy.dDay
+                              ? 'bg-rose-50 border border-rose-200 text-rose-600'
+                              : 'bg-slate-100 text-slate-600'
+                          }`}>
+                            {policy.dDay || policy.status || '상시모집'}
+                          </span>
+                        </div>
+
+                        {/* Title & Summary */}
+                        <div>
+                          <h3
+                            onClick={() => onNavigate?.('detail', policy.id)}
+                            className="font-bold text-base text-slate-900 group-hover:text-sky-600 transition-colors cursor-pointer line-clamp-1"
+                            title={policy.title}
+                          >
+                            {policy.title}
+                          </h3>
+                          <p className="text-xs text-slate-500 mt-1 leading-relaxed line-clamp-2 min-h-[32px]">
+                            {policy.benefitSummary || '지원 조건 및 혜택 내용을 확인해 보세요.'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Card Bottom Meta Box */}
+                      <div className="mt-5 pt-3.5 space-y-2 bg-gradient-to-b from-slate-50/70 to-sky-50/40 -mx-5 -mb-5 p-5 rounded-b-2xl border-t border-slate-100">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-slate-500">지원 대상</span>
+                          <span className="font-semibold text-slate-800 truncate max-w-[170px]">
+                            {policy.targetAge || '연령 무관'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-slate-500">자격 요건</span>
+                          <span className="font-semibold text-slate-700 truncate max-w-[170px]">
+                            {policy.incomeCondition || '제한 없음'}
+                          </span>
+                        </div>
+
+                        <button
+                          onClick={() => onNavigate?.('detail', policy.id)}
+                          className="w-full mt-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-600 hover:to-sky-700 text-white font-semibold text-xs text-center flex items-center justify-center gap-1.5 shadow-sm shadow-sky-200 transition-all cursor-pointer"
+                        >
+                          <span>상세 정보 및 신청 방법 확인</span>
+                          <span>→</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
-          </h1>
-<p className="text-slate-600 text-sm md:text-base leading-relaxed">
-            {hasNickname
-              ? '소득 수준 및 무주택 단독 세대주 기준 자동 산출 결과, 올 한 해 최대 혜택을 설계해 드립니다.'
-              : '나이, 거주지, 소득 및 관심 분야를 프로필에 입력하시면 청년기본법 기준 최적의 혜택을 찾아드립니다.'}
-          </p>
-</div>
-{/* Graphic & Metric Badge Card */}
-<div className="flex items-center gap-4 bg-white/90 backdrop-blur-md rounded-2xl p-4 md:p-5 border border-sky-100 shadow-md shadow-sky-100/60 shrink-0 self-start md:self-auto">
-{/* Colorful 3D-Style Illustration Graphic: Piggy Bank / Coin Wallet */}
-<div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-100 via-yellow-50 to-orange-100 border border-amber-200 flex items-center justify-center shadow-inner shrink-0">
-<svg className="w-8 h-8 text-amber-500 drop-shadow-sm" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
-<rect fill="#FEF3C7" height="12" rx="3" stroke="#F59E0B" width="20" x="2" y="6"></rect>
-<circle cx="16" cy="12" fill="#FBBF24" r="2.5" stroke="#D97706"></circle>
-<path d="M6 10h3M6 14h2" stroke="#D97706" strokeLinecap="round"></path>
-</svg>
-</div>
-<div className="pr-1">
-<div className="flex items-center gap-1.5 mb-0.5">
-<span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-<span className="text-xs font-medium text-slate-500">연간 수혜 예상액</span>
-</div>
-<div className="flex items-baseline gap-1">
-<span className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight">최대 360만</span>
-<span className="text-sm font-bold text-sky-600">원</span>
-</div>
-</div>
-</div>
-</div>
-</div>
-{/* Quick Category Navigation Filters with Colorful Illustrated Badges */}
-<div className="flex items-center justify-between gap-4 flex-wrap">
-<div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none" id="category-tabs">
-{/* All Tab */}
-<button onClick={() => onNavigate?.('explore')} className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl font-semibold text-sm transition-all shadow-sm bg-sky-600 text-white border border-sky-600 cursor-pointer">
-<span className="w-5 h-5 rounded-full bg-white/25 flex items-center justify-center text-xs">✨</span>
-<span className="">전체 (18)</span>
-</button>
-{/* Job Tab */}
-<button onClick={() => onNavigate?.('explore')} className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl font-semibold text-sm transition-all bg-white text-slate-700 hover:bg-amber-50/70 border border-slate-200/80 hover:border-amber-200 shadow-xs cursor-pointer">
-<span className="w-5 h-5 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center text-xs">💼</span>
-<span className="">일자리 (6)</span>
-</button>
-{/* Housing Tab */}
-<button onClick={() => onNavigate?.('explore')} className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl font-semibold text-sm transition-all bg-white text-slate-700 hover:bg-rose-50/70 border border-slate-200/80 hover:border-rose-200 shadow-xs cursor-pointer">
-<span className="w-5 h-5 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center text-xs">🏡</span>
-<span className="">주거 (5)</span>
-</button>
-{/* Education Tab */}
-<button onClick={() => onNavigate?.('explore')} className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl font-semibold text-sm transition-all bg-white text-slate-700 hover:bg-emerald-50/70 border border-slate-200/80 hover:border-emerald-200 shadow-xs cursor-pointer">
-<span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-xs">🎓</span>
-<span className="">교육·직업훈련 (3)</span>
-</button>
-{/* Finance Tab */}
-<button onClick={() => onNavigate?.('explore')} className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl font-semibold text-sm transition-all bg-white text-slate-700 hover:bg-purple-50/70 border border-slate-200/80 hover:border-purple-200 shadow-xs cursor-pointer">
-<span className="w-5 h-5 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-xs">🪙</span>
-<span className="">금융·복지·문화 (4)</span>
-</button>
-{/* Engagement Tab */}
-<button onClick={() => onNavigate?.('explore')} className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl font-semibold text-sm transition-all bg-white text-slate-700 hover:bg-sky-50 border border-slate-200/80 hover:border-sky-200 shadow-xs cursor-pointer">
-<span className="w-5 h-5 rounded-full bg-sky-100 text-sky-600 flex items-center justify-center text-xs">💬</span>
-<span className="">참여·기반</span>
-</button>
-</div>
-{/* Live Sort Indicator */}
-<div className="flex items-center gap-2 text-slate-500 text-xs font-medium bg-white px-3 py-1.5 rounded-full border border-slate-200/70 shadow-xs">
-<span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-<span className="">실시간 정책 공고 데이터 동기화됨</span>
-</div>
-</div>
-{/* Main Content Layout: 8 cols Policy Cards + 4 cols Side Widgets */}
-<div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-{/* Primary Policy Grid (8 Cols) */}
-<div className="lg:col-span-8 space-y-6">
-<div className="flex items-center justify-between">
-<div className="space-y-0.5">
-<h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-<span className="">추천 핵심 정책</span>
-<span className="text-xs px-2 py-0.5 rounded-full bg-sky-100 text-sky-700 font-semibold">적합도 90%+</span>
-</h2>
-<p className="text-xs text-slate-500">지원 적합도 90% 이상 선별된 프로그램</p>
-</div>
-<a onClick={(e) => { e.preventDefault(); onNavigate?.('explore'); }} data-path="explore" className="text-xs font-semibold text-sky-600 hover:text-sky-700 flex items-center gap-1 cursor-pointer hover:underline" href="#">전체보기 (18) <span className="material-symbols-outlined text-[14px]">arrow_forward</span></a>
-</div>
-<div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-{/* Policy Card 1 (Housing) */}
-<div className="bg-white rounded-2xl p-5 border border-sky-100 hover:border-sky-300 shadow-sm hover:shadow-md hover:shadow-sky-100/60 transition-all flex flex-col justify-between group">
-<div className="space-y-3">
-{/* Card Header with Colorful Illustration & Badges */}
-<div className="flex items-center justify-between">
-<div className="flex items-center gap-2.5">
-<div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-rose-100 to-rose-50 border border-rose-200/60 flex items-center justify-center shadow-xs">
-{/* Colorful House SVG */}
-<svg className="w-6 h-6 text-rose-500" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-<path d="M3 10l9-7 9 7v10a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-4H9v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V10z" fill="#FFE4E6" stroke="#F43F5E"></path>
-<rect fill="#FDA4AF" height="4" stroke="#E11D48" width="4" x="10" y="10"></rect>
-</svg>
-</div>
-<div>
-<span className="inline-block px-2 py-0.5 rounded-md bg-rose-50 text-rose-600 text-[11px] font-bold">주거</span>
-</div>
-</div>
-<span className="px-2.5 py-1 rounded-full bg-red-50 border border-red-200 text-red-600 text-xs font-bold">
-      D-5 마감임박
-    </span>
-</div>
-<div>
-<h3 onClick={() => onNavigate?.('detail')} data-path="detail" className="font-bold text-base text-slate-900 group-hover:text-sky-600 transition-colors cursor-pointer">
-      청년 주택 드림 청약통장
-    </h3>
-<p className="text-xs text-slate-500 mt-1 leading-relaxed line-clamp-1 truncate">
-      연 최대 4.5% 우대금리 및 주택 분양 시 2%대 저리대출 연계 지원
-    </p>
-</div>
-</div>
-<div className="mt-5 pt-3.5 space-y-2.5 bg-gradient-to-b from-slate-50/70 to-sky-50/40 -mx-5 -mb-5 p-5 rounded-b-2xl border-t border-slate-100">
-<div className="flex justify-between items-center text-xs">
-<span className="text-slate-500">지원 대상</span>
-<span className="font-semibold text-slate-800">만 19~34세 무주택자</span>
-</div>
-<div className="flex justify-between items-center text-xs">
-<span className="text-slate-500">주요 혜택</span>
-<span className="text-sm font-extrabold text-sky-600">연 4.5% + 소득공제</span>
-</div>
-<a onClick={(e) => { e.preventDefault(); onNavigate?.('detail'); }} data-path="detail" className="w-full mt-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-600 hover:to-sky-700 text-white font-semibold text-xs text-center flex items-center justify-center gap-1.5 shadow-sm shadow-sky-200 transition-all cursor-pointer" href="#">
-<span className="">즉시 신청자격 검토</span>
-<span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-</a>
-</div>
-</div>
-{/* Policy Card 2 (Employment) */}
-<div className="bg-white rounded-2xl p-5 border border-sky-100 hover:border-sky-300 shadow-sm hover:shadow-md hover:shadow-sky-100/60 transition-all flex flex-col justify-between group">
-<div className="space-y-3">
-{/* Card Header with Colorful Illustration & Badges */}
-<div className="flex items-center justify-between">
-<div className="flex items-center gap-2.5">
-<div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-100 to-amber-50 border border-amber-200/60 flex items-center justify-center shadow-xs">
-{/* Colorful Briefcase SVG */}
-<svg className="w-6 h-6 text-amber-500" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-<rect fill="#FEF3C7" height="13" rx="2" stroke="#F59E0B" width="18" x="3" y="7"></rect>
-<path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" stroke="#D97706"></path>
-<circle cx="12" cy="13" fill="#D97706" r="1.5"></circle>
-</svg>
-</div>
-<div>
-<span className="inline-block px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 text-[11px] font-bold">일자리</span>
-</div>
-</div>
-<span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold">
-      상시모집
-    </span>
-</div>
-<div>
-<h3 onClick={() => onNavigate?.('detail')} data-path="detail" className="font-bold text-base text-slate-900 group-hover:text-sky-600 transition-colors cursor-pointer">
-      국민취업지원제도 1유형
-    </h3>
-<p className="text-xs text-slate-500 mt-1 leading-relaxed line-clamp-1 truncate">
-      구직 활동 기간 동안 안정적인 취업지원 서비스 및 구직촉진수당 제공
-    </p>
-</div>
-</div>
-<div className="mt-5 pt-3.5 space-y-2.5 bg-gradient-to-b from-slate-50/70 to-sky-50/40 -mx-5 -mb-5 p-5 rounded-b-2xl border-t border-slate-100">
-<div className="flex justify-between items-center text-xs">
-<span className="text-slate-500">소득 요건</span>
-<span className="font-semibold text-slate-800">중위소득 60% 이하</span>
-</div>
-<div className="flex justify-between items-center text-xs">
-<span className="text-slate-500">지원 금액</span>
-<span className="text-sm font-extrabold text-sky-600">월 50만원 (6개월)</span>
-</div>
-<a onClick={(e) => { e.preventDefault(); onNavigate?.('detail'); }} data-path="detail" className="w-full mt-2 py-2.5 px-4 rounded-xl bg-white hover:bg-sky-50 text-sky-700 font-semibold text-xs text-center flex items-center justify-center gap-1.5 border border-sky-200 shadow-xs transition-all cursor-pointer" href="#">
-<span className="">상세 요건 확인</span>
-<span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-</a>
-</div>
-</div>
-{/* Policy Card 3 (Monthly Rent) */}
-<div className="bg-white rounded-2xl p-5 border border-sky-100 hover:border-sky-300 shadow-sm hover:shadow-md hover:shadow-sky-100/60 transition-all flex flex-col justify-between group">
-<div className="space-y-3">
-{/* Card Header with Colorful Illustration & Badges */}
-<div className="flex items-center justify-between">
-<div className="flex items-center gap-2.5">
-<div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-teal-100 to-teal-50 border border-teal-200/60 flex items-center justify-center shadow-xs">
-{/* Colorful Key/Door SVG */}
-<svg className="w-6 h-6 text-teal-600" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-<circle cx="9" cy="12" fill="#CCFBF1" r="4" stroke="#0D9488"></circle>
-<path d="M13 12h8m-3-3v3m-3 0v3" stroke="#0F766E" strokeLinecap="round"></path>
-</svg>
-</div>
-<div>
-<span className="inline-block px-2 py-0.5 rounded-md bg-teal-50 text-teal-700 text-[11px] font-bold">주거</span>
-</div>
-</div>
-<span className="px-2.5 py-1 rounded-full bg-teal-50 border border-teal-200 text-teal-700 text-xs font-bold">
-      D-12
-    </span>
-</div>
-<div>
-<h3 onClick={() => onNavigate?.('detail')} data-path="detail" className="font-bold text-base text-slate-900 group-hover:text-sky-600 transition-colors cursor-pointer">
-      청년월세 한시 특별지원 2차
-    </h3>
-<p className="text-xs text-slate-500 mt-1 leading-relaxed line-clamp-1 truncate">
-      실제 납부하는 임차료 범위 내에서 매월 최대 20만원씩 12개월 분할 지원
-    </p>
-</div>
-</div>
-<div className="mt-5 pt-3.5 space-y-2.5 bg-gradient-to-b from-slate-50/70 to-sky-50/40 -mx-5 -mb-5 p-5 rounded-b-2xl border-t border-slate-100">
-<div className="flex justify-between items-center text-xs">
-<span className="text-slate-500">대상 구분</span>
-<span className="font-semibold text-slate-800">부모 별도 거주 무주택 청년</span>
-</div>
-<div className="flex justify-between items-center text-xs">
-<span className="text-slate-500">총 혜택</span>
-<span className="text-sm font-extrabold text-sky-600">총 240만원 지원</span>
-</div>
-<a onClick={(e) => { e.preventDefault(); onNavigate?.('detail'); }} data-path="detail" className="w-full mt-2 py-2.5 px-4 rounded-xl bg-white hover:bg-sky-50 text-sky-700 font-semibold text-xs text-center flex items-center justify-center gap-1.5 border border-sky-200 shadow-xs transition-all cursor-pointer" href="#">
-<span className="">서류 간편 확인</span>
-<span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-</a>
-</div>
-</div>
-{/* Policy Card 4 (Education / Bootcamp) */}
-<div className="bg-white rounded-2xl p-5 border border-sky-100 hover:border-sky-300 shadow-sm hover:shadow-md hover:shadow-sky-100/60 transition-all flex flex-col justify-between group">
-<div className="space-y-3">
-{/* Card Header with Colorful Illustration & Badges */}
-<div className="flex items-center justify-between">
-<div className="flex items-center gap-2.5">
-<div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-100 to-indigo-50 border border-purple-200/60 flex items-center justify-center shadow-xs">
-{/* Colorful Graduation Cap SVG */}
-<svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-<path d="M2 9l10-5 10 5-10 5L2 9z" fill="#EDE9FE" stroke="#8B5CF6"></path>
-<path d="M6 12v5c0 2 3 3 6 3s6-1 6-3v-5" stroke="#7C3AED"></path>
-<line stroke="#7C3AED" x1="22" x2="22" y1="10" y2="15"></line>
-</svg>
-</div>
-<div>
-<span className="inline-block px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 text-[11px] font-bold">교육·직업훈련</span>
-</div>
-</div>
-<span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold">
-      모집예정
-    </span>
-</div>
-<div>
-<h3 onClick={() => onNavigate?.('detail')} data-path="detail" className="font-bold text-base text-slate-900 group-hover:text-sky-600 transition-colors cursor-pointer">
-      K-디지털 트레이닝 부트캠프
-    </h3>
-<p className="text-xs text-slate-500 mt-1 leading-relaxed line-clamp-1 truncate">
-      기업 주도형 실무 프로젝트 기반 전액 국비지원 첨단 IT·AI 직무 교육
-    </p>
-</div>
-</div>
-<div className="mt-5 pt-3.5 space-y-2.5 bg-gradient-to-b from-slate-50/70 to-sky-50/40 -mx-5 -mb-5 p-5 rounded-b-2xl border-t border-slate-100">
-<div className="flex justify-between items-center text-xs">
-<span className="text-slate-500">참여 자격</span>
-<span className="font-semibold text-slate-800">내일배움카드 발급 청년</span>
-</div>
-<div className="flex justify-between items-center text-xs">
-<span className="text-slate-500">국비 지원</span>
-<span className="text-sm font-extrabold text-sky-600">교육비 100% 전액</span>
-</div>
-<a onClick={(e) => { e.preventDefault(); onNavigate?.('detail'); }} data-path="detail" className="w-full mt-2 py-2.5 px-4 rounded-xl bg-white hover:bg-sky-50 text-sky-700 font-semibold text-xs text-center flex items-center justify-center gap-1.5 border border-sky-200 shadow-xs transition-all cursor-pointer" href="#">
-<span className="">알림 신청하기</span>
-<span className="material-symbols-outlined text-[16px]">notifications_active</span>
-</a>
-</div>
-</div>
-</div>
-{/* Inline Visual Curation Banner (Soft Pastel Card) */}
-<div className="rounded-2xl bg-gradient-to-r from-sky-50 via-white to-indigo-50/40 p-5 border border-sky-100 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
-<div className="flex items-center gap-3.5">
-<div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-teal-400 to-sky-500 flex items-center justify-center text-white shadow-sm shadow-teal-200 shrink-0">
-<svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 24 24">
-<path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" strokeLinecap="round" strokeLinejoin="round"></path>
-</svg>
-</div>
-<div>
-<h4 className="font-bold text-sm text-slate-900">복잡한 조건, 1분 간편 자가진단</h4>
-<p className="text-xs text-slate-500">주민등록등본 및 소득증명원 없이도 즉시 가능 여부 확인</p>
-</div>
-</div>
-<button onClick={() => onNavigate?.('profile')} data-path="profile" className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs whitespace-nowrap shadow-sm shadow-sky-200 transition-all cursor-pointer">
-  자가진단 시작
-</button>
-</div>
-</div>
-{/* Right Column: D-Day Calendar & AI 3-Line Briefing (4 Cols) */}
-<div className="lg:col-span-4 space-y-5">
-{/* AI 3-Line Briefing Box with Cheerful Pastel AI Graphic */}
-<div className="bg-white rounded-2xl p-5 border border-sky-100 shadow-sm shadow-sky-100/40 space-y-4 relative overflow-hidden">
-<div className="flex items-center justify-between">
-<div className="flex items-center gap-2.5">
-<div className="w-8 h-8 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
-<svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-<rect fill="#EEF2FF" height="16" rx="4" width="16" x="4" y="4"></rect>
-<circle cx="9" cy="10" fill="#6366F1" r="1.5"></circle>
-<circle cx="15" cy="10" fill="#6366F1" r="1.5"></circle>
-<path d="M9 15c1 1 5 1 6 0" stroke="#4F46E5" strokeLinecap="round"></path>
-</svg>
-</div>
-<h3 onClick={() => onNavigate?.('news')} data-path="news" className="font-bold text-sm text-slate-900 cursor-pointer hover:text-sky-600 transition-colors">AI 정책 3줄 요약 브리핑</h3>
-</div>
-<span className="px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-bold text-[11px] border border-indigo-100">오늘자</span>
-</div>
-<div className="space-y-2.5 pt-1">
-<div onClick={() => onNavigate?.('news')} data-path="news" className="p-3 rounded-xl bg-slate-50/80 border border-slate-100/80 flex gap-2.5 items-start cursor-pointer hover:bg-sky-50/40 transition-colors">
-<span className="w-5 h-5 rounded-full bg-indigo-500 text-white flex items-center justify-center text-[11px] font-bold shrink-0 mt-0.5 shadow-xs">1</span>
-<p className="text-xs text-slate-600 leading-relaxed">
-<strong className="text-slate-800 font-semibold">청년도약계좌 기여금 매칭비율</strong>이 이달부터 대폭 확대되어 월 실납입 효과가 상승했습니다.
-</p>
-</div>
-<div onClick={() => onNavigate?.('news')} data-path="news" className="p-3 rounded-xl bg-slate-50/80 border border-slate-100/80 flex gap-2.5 items-start cursor-pointer hover:bg-sky-50/40 transition-colors">
-<span className="w-5 h-5 rounded-full bg-indigo-500 text-white flex items-center justify-center text-[11px] font-bold shrink-0 mt-0.5 shadow-xs">2</span>
-<p className="text-xs text-slate-600 leading-relaxed">
-<strong className="text-slate-800 font-semibold">수도권 청년 보증부 월세대출</strong> 대상 전세보증금 기준이 1억원까지 완화되었습니다.
-</p>
-</div>
-<div onClick={() => onNavigate?.('news')} data-path="news" className="p-3 rounded-xl bg-slate-50/80 border border-slate-100/80 flex gap-2.5 items-start cursor-pointer hover:bg-sky-50/40 transition-colors">
-<span className="w-5 h-5 rounded-full bg-indigo-500 text-white flex items-center justify-center text-[11px] font-bold shrink-0 mt-0.5 shadow-xs">3</span>
-<p className="text-xs text-slate-600 leading-relaxed">
-  구직촉진수당 참여자는 취업성공수당 최대 150만원을 추가로 지급받을 수 있습니다.
-</p>
-</div>
-</div>
-</div><div className="bg-white rounded-2xl p-5 border border-sky-100 shadow-sm shadow-sky-100/40 space-y-3.5 relative overflow-hidden">
-<div className="flex items-center justify-between">
-<div className="flex items-center gap-2.5">
-<div className="w-8 h-8 rounded-xl bg-teal-50 border border-teal-200/60 flex items-center justify-center text-teal-600 shadow-xs">
-<svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
-<path d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" strokeLinecap="round" strokeLinejoin="round"></path>
-</svg>
-</div>
-<h3 onClick={() => onNavigate?.('news')} data-path="news" className="font-bold text-sm text-slate-900 cursor-pointer hover:text-sky-600 transition-colors">오늘의 관련 뉴스</h3>
-</div>
-<span className="px-2.5 py-0.5 rounded-full bg-teal-50 text-teal-700 font-bold text-[11px] border border-teal-200">실시간 팩트체크</span>
-</div>
-<div className="space-y-2.5 pt-0.5">
-<div onClick={() => onNavigate?.('news')} data-path="news" className="p-3 rounded-xl bg-slate-50/80 border border-slate-100/80 space-y-1.5 hover:bg-sky-50/50 hover:border-sky-100 transition-colors group cursor-pointer">
-<div className="flex items-center justify-between">
-<span className="px-2 py-0.5 rounded-md bg-sky-100 text-sky-700 font-bold text-[11px]">한국경제</span>
-<a onClick={(e) => { e.preventDefault(); e.stopPropagation(); onNavigate?.('news'); }} data-path="news" className="text-[11px] text-slate-400 group-hover:text-sky-600 flex items-center gap-0.5 font-medium transition-colors" href="#">
-          원문보기 <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
-</a>
-</div>
-<h4 className="text-xs font-bold text-slate-800 line-clamp-1 group-hover:text-sky-700 transition-colors">
-        2025 서울 청년월세 첫날 접속폭주 대비... 서류 사전 준비 꿀팁
-      </h4>
-<p className="text-[11px] text-slate-500 leading-snug line-clamp-1 truncate">
-        선착순 아닌 정량평가, 보증금 요건과 주민등록등본 꼼꼼 체크 필요
-      </p>
-</div>
-<div onClick={() => onNavigate?.('news')} data-path="news" className="p-3 rounded-xl bg-slate-50/80 border border-slate-100/80 space-y-1.5 hover:bg-sky-50/50 hover:border-sky-100 transition-colors group cursor-pointer">
-<div className="flex items-center justify-between">
-<span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-700 font-bold text-[11px]">매일경제</span>
-<a onClick={(e) => { e.preventDefault(); e.stopPropagation(); onNavigate?.('news'); }} data-path="news" className="text-[11px] text-slate-400 group-hover:text-sky-600 flex items-center gap-0.5 font-medium transition-colors" href="#">
-          원문보기 <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
-</a>
-</div>
-<h4 className="text-xs font-bold text-slate-800 line-clamp-1 group-hover:text-sky-700 transition-colors">
-        청년도약계좌 기여금 매칭 비율 상향... "만기 시 최대 5천만원 목돈"
-      </h4>
-<p className="text-[11px] text-slate-500 leading-snug line-clamp-1 truncate">
-        정부 기여 매칭 비율 확대 발표로 청년 자산 형성 효과 실질적 제고
-      </p>
-</div>
-<div onClick={() => onNavigate?.('news')} data-path="news" className="p-3 rounded-xl bg-slate-50/80 border border-slate-100/80 space-y-1.5 hover:bg-sky-50/50 hover:border-sky-100 transition-colors group cursor-pointer">
-<div className="flex items-center justify-between">
-<span className="px-2 py-0.5 rounded-md bg-purple-100 text-purple-700 font-bold text-[11px]">조선비즈</span>
-<a onClick={(e) => { e.preventDefault(); e.stopPropagation(); onNavigate?.('news'); }} data-path="news" className="text-[11px] text-slate-400 group-hover:text-sky-600 flex items-center gap-0.5 font-medium transition-colors" href="#">
-          원문보기 <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
-</a>
-</div>
-<h4 className="text-xs font-bold text-slate-800 line-clamp-1 group-hover:text-sky-700 transition-colors">
-        상반기 K-디지털 청년 AI 부트캠프 모집 개시
-      </h4>
-<p className="text-[11px] text-slate-500 leading-snug line-clamp-1 truncate">
-        기업 주도 실무 프로젝트 전액 무료 참여 및 훈련장려금 월 31.6만원 추가 지급
-      </p>
-</div>
-</div>
-</div>
-{/* D-Day Urgent Deadline Tracker Widget with Colorful Clock Graphic */}
-<div className="bg-white rounded-2xl p-5 border border-sky-100 shadow-sm shadow-sky-100/40 space-y-4">
-<div className="flex items-center justify-between">
-<div className="flex items-center gap-2.5">
-<div className="w-8 h-8 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-500">
-<svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-<circle cx="12" cy="12" fill="#FEF3C7" r="9"></circle>
-<polyline points="12 7 12 12 15 15" stroke="#D97706"></polyline>
-</svg>
-</div>
-<h3 onClick={() => onNavigate?.('kanban')} data-path="kanban" className="font-bold text-sm text-slate-900 cursor-pointer hover:text-sky-600 transition-colors">마감 임박 캘린더</h3>
-</div>
-<a onClick={(e) => { e.preventDefault(); onNavigate?.('kanban'); }} data-path="kanban" className="text-xs font-semibold text-sky-600 hover:text-sky-700 cursor-pointer hover:underline" href="#">전체일정</a>
-</div>
-<div className="space-y-2">
-<div onClick={() => onNavigate?.('detail')} data-path="detail" className="flex items-center justify-between p-2.5 rounded-xl hover:bg-sky-50/50 transition-colors border border-transparent hover:border-sky-100 cursor-pointer">
-<div className="space-y-0.5">
-<span className="font-medium text-xs text-slate-800 line-clamp-1">서울시 청년 대중교통비 지원</span>
-<span className="text-[11px] text-slate-400">3월 15일 18:00 마감</span>
-</div>
-<span className="px-2 py-0.5 rounded-md bg-rose-50 border border-rose-200 text-rose-600 text-xs font-bold shrink-0">
-  D-2
-</span>
-</div>
-<div onClick={() => onNavigate?.('detail')} data-path="detail" className="flex items-center justify-between p-2.5 rounded-xl hover:bg-sky-50/50 transition-colors border border-transparent hover:border-sky-100 cursor-pointer">
-<div className="space-y-0.5">
-<span className="font-medium text-xs text-slate-800 line-clamp-1">청년내일채움공제 기업매칭</span>
-<span className="text-[11px] text-slate-400">3월 18일 접수종료</span>
-</div>
-<span className="px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-amber-600 text-xs font-bold shrink-0">
-  D-5
-</span>
-</div>
-<div onClick={() => onNavigate?.('detail')} data-path="detail" className="flex items-center justify-between p-2.5 rounded-xl hover:bg-sky-50/50 transition-colors border border-transparent hover:border-sky-100 cursor-pointer">
-<div className="space-y-0.5">
-<span className="font-medium text-xs text-slate-800 line-clamp-1">중소기업 청년 전세자금대출</span>
-<span className="text-[11px] text-slate-400">1분기 예산 소진 시까지</span>
-</div>
-<span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-xs font-semibold shrink-0">
-  D-14
-</span>
-</div>
-</div>
-{/* Quick Reminder SMS Toggle */}
-<div className="p-3 rounded-xl bg-sky-50/60 border border-sky-100 flex items-center justify-between">
-<div className="flex items-center gap-2">
-<span className="w-6 h-6 rounded-full bg-amber-400 text-white flex items-center justify-center text-xs font-bold">💬</span>
-<span className="text-xs font-medium text-slate-700">마감 3일 전 카카오 알림톡</span>
-</div>
-<label className="relative inline-flex items-center cursor-pointer">
-<input defaultChecked={true} className="sr-only peer" type="checkbox" />
-<div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
-</label>
-</div>
-</div>
-{/* Consultation Floating Banner (Pastel Card Aesthetic) */}
-<div className="rounded-2xl bg-gradient-to-br from-white via-teal-50/30 to-sky-50/50 p-5 border border-sky-100 shadow-sm space-y-3">
-<div className="flex items-center gap-3">
-<div className="w-10 h-10 rounded-xl bg-teal-100 border border-teal-200 flex items-center justify-center text-teal-600 shrink-0 shadow-xs">
-<svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-<path d="M19 11a7 7 0 0 1-7 7m0 0a7 7 0 0 1-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" strokeLinecap="round"></path>
-</svg>
-</div>
-<div>
-<span className="font-bold text-sm text-slate-900">전담 정책 설계사 상담</span>
-<p className="text-xs text-slate-500">어려운 서류 심사 무료 동행 지원</p>
-</div>
-</div>
-<button onClick={() => onNavigate?.('profile')} data-path="profile" className="w-full py-2 rounded-xl bg-white hover:bg-sky-50 text-sky-700 font-semibold text-xs border border-sky-200 hover:border-sky-300 transition-all shadow-xs cursor-pointer">
-  온라인 1:1 상담 예약
-</button>
-</div>
-</div>
-</div>
-</div>
-</main>
+
+            {/* Inline Visual Curation Banner */}
+            <div className="rounded-2xl bg-gradient-to-r from-sky-50 via-white to-indigo-50/40 p-5 border border-sky-100 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-teal-400 to-sky-500 flex items-center justify-center text-white shadow-sm shadow-teal-200 shrink-0">
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 24 24">
+                    <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" strokeLinecap="round" strokeLinejoin="round"></path>
+                  </svg>
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm text-slate-900">맞춤 정책 실시간 검색 & 필터링</h4>
+                  <p className="text-xs text-slate-500">총 {policies.length}건의 청년 정책 중 나에게 딱 맞는 혜택을 찾아보세요</p>
+                </div>
+              </div>
+              <button
+                onClick={() => onNavigate?.('explore')}
+                className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs whitespace-nowrap shadow-sm shadow-sky-200 transition-all cursor-pointer"
+              >
+                전체 정책 탐색하기
+              </button>
+            </div>
+          </div>
+
+          {/* Right Column: D-Day Calendar & AI Briefing (4 Cols) */}
+          <div className="lg:col-span-4 space-y-5">
+            {/* AI 3-Line Briefing Box */}
+            <div className="bg-white rounded-2xl p-5 border border-sky-100 shadow-sm shadow-sky-100/40 space-y-4 relative overflow-hidden">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-sm">
+                    🤖
+                  </div>
+                  <h3
+                    onClick={() => onNavigate?.('news')}
+                    className="font-bold text-sm text-slate-900 cursor-pointer hover:text-sky-600 transition-colors"
+                  >
+                    AI 정책 3줄 요약 브리핑
+                  </h3>
+                </div>
+                <span className="px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-bold text-[11px] border border-indigo-100">
+                  실시간
+                </span>
+              </div>
+              
+              <div className="space-y-2.5 pt-1">
+                <div
+                  onClick={() => onNavigate?.('news')}
+                  className="p-3 rounded-xl bg-slate-50/80 border border-slate-100/80 flex gap-2.5 items-start cursor-pointer hover:bg-sky-50/40 transition-colors"
+                >
+                  <span className="w-5 h-5 rounded-full bg-indigo-500 text-white flex items-center justify-center text-[11px] font-bold shrink-0 mt-0.5 shadow-xs">
+                    1
+                  </span>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    <strong className="text-slate-800 font-semibold">청년 주거 지원</strong>: 월세 특별지원 및 저금리 버팀목 대출 지원이 확대 운영 중입니다.
+                  </p>
+                </div>
+                <div
+                  onClick={() => onNavigate?.('news')}
+                  className="p-3 rounded-xl bg-slate-50/80 border border-slate-100/80 flex gap-2.5 items-start cursor-pointer hover:bg-sky-50/40 transition-colors"
+                >
+                  <span className="w-5 h-5 rounded-full bg-indigo-500 text-white flex items-center justify-center text-[11px] font-bold shrink-0 mt-0.5 shadow-xs">
+                    2
+                  </span>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    <strong className="text-slate-800 font-semibold">일자리 & 교육</strong>: K-디지털 트레이닝 및 청년도전지원사업 인센티브가 지급됩니다.
+                  </p>
+                </div>
+                <div
+                  onClick={() => onNavigate?.('news')}
+                  className="p-3 rounded-xl bg-slate-50/80 border border-slate-100/80 flex gap-2.5 items-start cursor-pointer hover:bg-sky-50/40 transition-colors"
+                >
+                  <span className="w-5 h-5 rounded-full bg-indigo-500 text-white flex items-center justify-center text-[11px] font-bold shrink-0 mt-0.5 shadow-xs">
+                    3
+                  </span>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    <strong className="text-slate-800 font-semibold">자산형성</strong>: 청년도약계좌 기여금 매칭과 이자 비과세 혜택을 신청할 수 있습니다.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* D-Day Urgent Tracker Widget */}
+            <div className="bg-white rounded-2xl p-5 border border-sky-100 shadow-sm shadow-sky-100/40 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-500">
+                    ⏰
+                  </div>
+                  <h3
+                    onClick={() => onNavigate?.('calendar')}
+                    className="font-bold text-sm text-slate-900 cursor-pointer hover:text-sky-600 transition-colors"
+                  >
+                    마감 임박 & 핵심 일정
+                  </h3>
+                </div>
+                <button
+                  onClick={() => onNavigate?.('calendar')}
+                  className="text-xs font-semibold text-sky-600 hover:text-sky-700 cursor-pointer hover:underline"
+                >
+                  전체일정 →
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {urgentPolicies.map((p) => (
+                  <div
+                    key={p.id}
+                    onClick={() => onNavigate?.('detail', p.id)}
+                    className="flex items-center justify-between p-2.5 rounded-xl hover:bg-sky-50/50 transition-colors border border-transparent hover:border-sky-100 cursor-pointer"
+                  >
+                    <div className="space-y-0.5 max-w-[190px]">
+                      <span className="font-medium text-xs text-slate-800 line-clamp-1">
+                        {p.title}
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        {p.organization}
+                      </span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-md bg-rose-50 border border-rose-200 text-rose-600 text-xs font-bold shrink-0">
+                      {p.dDay || '진행중'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Quick Reminder Toggle */}
+              <div className="p-3 rounded-xl bg-sky-50/60 border border-sky-100 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-amber-400 text-white flex items-center justify-center text-xs font-bold">
+                    💬
+                  </span>
+                  <span className="text-xs font-medium text-slate-700">마감 3일 전 텔레그램/알림톡</span>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input defaultChecked={true} className="sr-only peer" type="checkbox" />
+                  <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
+                </label>
+              </div>
+            </div>
+
+            {/* Consultation Floating Banner */}
+            <div className="rounded-2xl bg-gradient-to-br from-white via-teal-50/30 to-sky-50/50 p-5 border border-sky-100 shadow-sm space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-teal-100 border border-teal-200 flex items-center justify-center text-teal-600 shrink-0 shadow-xs">
+                  🧑‍💼
+                </div>
+                <div>
+                  <span className="font-bold text-sm text-slate-900">전담 정책 설계사 상담</span>
+                  <p className="text-xs text-slate-500">어려운 서류 심사 무료 동행 지원</p>
+                </div>
+              </div>
+              <button
+                onClick={() => onNavigate?.('profile')}
+                className="w-full py-2 rounded-xl bg-white hover:bg-sky-50 text-sky-700 font-semibold text-xs border border-sky-200 hover:border-sky-300 transition-all shadow-xs cursor-pointer"
+              >
+                내 맞춤 프로필 진단하기
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </main>
   );
 };
 

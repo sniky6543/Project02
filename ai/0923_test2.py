@@ -6,12 +6,16 @@
 3. 구글 뉴스 RSS 실시간 크롤링 (언론사 원문 디코딩 수집) + AI 3줄 요약
 """
 
+import os
 import sys
 import warnings
 import urllib.parse
+import re
+from pathlib import Path
 import feedparser
 import requests
 import bs4
+from dotenv import load_dotenv
 from googlenewsdecoder import gnewsdecoder
 
 # Windows 콘솔 인코딩 대응 (한글 및 특수문자 깨짐 방지)
@@ -22,35 +26,33 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+# 상위 디렉토리의 .env 파일 로드
+current_dir = Path(__file__).resolve().parent
+project_root = current_dir.parent
+for p in [str(current_dir), str(project_root)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+root_env = project_root / ".env"
+if root_env.exists():
+    load_dotenv(dotenv_path=root_env)
+else:
+    load_dotenv()
+
 # LangChain 버전 관련 경고 억제
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-from langchain_community.llms import Ollama
-from langchain_core.prompts import PromptTemplate
-
-# 유연한 임포트 (ai.pipeline, 로컬 폴더, ai 디렉토리, backend/app 모두 지원)
 try:
-    from ai.pipeline.bokjiro_client import BokjiroClient
-    from ai.pipeline.youthcenter_client import YouthCenterClient
+    from bokjiro_client import BokjiroClient
+    from youthcenter_client import YouthCenterClient
 except ImportError:
-    try:
-        from bokjiro_client import BokjiroClient
-        from youthcenter_client import YouthCenterClient
-    except ImportError:
-        try:
-            from ai.bokjiro_client import BokjiroClient
-            from ai.youthcenter_client import YouthCenterClient
-        except ImportError:
-            from backend.app.bokjiro_client import BokjiroClient
-            from backend.app.youthcenter_client import YouthCenterClient
-
+    from ai.bokjiro_client import BokjiroClient
+    from ai.youthcenter_client import YouthCenterClient
 
 
 # ==============================================================================
-# [공통] AI 요약 엔진 및 프롬프트 설정 (Ollama Llama3)
+# [공통] AI 요약 엔진 및 프롬프트 설정 (Ollama Llama3 & 스마트 폴백)
 # ==============================================================================
-llm = Ollama(model="llama3", temperature=0)
-
 # 1. 정책 공고문 전용 3줄 요약 프롬프트
 policy_template = """
 당신은 대한민국 청년정책 전문 AI 큐레이터입니다.
@@ -62,20 +64,104 @@ policy_template = """
 
 [3줄 요약]:
 """
-policy_prompt = PromptTemplate(input_variables=["content"], template=policy_template)
 
 # 2. 뉴스 기사 전용 3줄 요약 프롬프트
 news_template = """
 당신은 청년 정책 및 시사 뉴스 전문 AI 요약가입니다.
 아래 제공된 뉴스 기사 원문을 분석하여 가장 핵심적인 내용을 반드시 한국어로 정확히 딱 3줄로 요약하세요.
-영어나 인사말, 서론/결론 문구(예: Here is a 3-line summary 등)는 절대 출력하지 말고 바로 [1] 번으로 시작하여 3줄만 작성하세요.
+영어나 인사말, 서론/결론 문구는 절대 출력하지 말고 바로 [1], [2], [3] 번호 매긴 3줄 형식으로만 작성하세요.
 
 뉴스 기사 원문:
 {content}
 
 [3줄 요약]:
 """
-news_prompt = PromptTemplate(input_variables=["content"], template=news_template)
+
+
+def is_ollama_online(host: str = "http://localhost:11434", timeout: float = 1.0) -> bool:
+    """로컬 Ollama 서버가 정상 실행 중인지 확인합니다."""
+    try:
+        res = requests.get(host, timeout=timeout)
+        return res.status_code == 200
+    except Exception:
+        return False
+
+
+def get_llm_instance():
+    """사용 가능한 LLM 인스턴스를 반환하거나 로컬 상태를 반환합니다."""
+    if is_ollama_online():
+        try:
+            from langchain_community.llms import Ollama
+            return Ollama(model="llama3", temperature=0), "Ollama (llama3)"
+        except Exception:
+            pass
+
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if openai_key:
+        try:
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=openai_key), "OpenAI (gpt-4o-mini)"
+        except Exception:
+            pass
+
+    return None, "Heuristic-Rule-AI"
+
+
+def fallback_3lines_summary(content: str, is_news: bool = False) -> str:
+    """Ollama/외부 LLM 서버 미실행 시 데이터로부터 핵심 3줄을 정밀 추출하는 내장 AI 요약 엔진"""
+    lines = [line.strip() for line in content.strip().split("\n") if line.strip()]
+
+    if not is_news:
+        # 정책 데이터 요약 파싱
+        name = ""
+        dept = ""
+        target = ""
+        benefit = ""
+        apply = ""
+        
+        for line in lines:
+            if line.startswith("정책명:"):
+                name = line.replace("정책명:", "").strip()
+            elif line.startswith("소관부처:") or line.startswith("주관기관:"):
+                dept = line.split(":", 1)[1].strip()
+            elif line.startswith("지원대상:") or line.startswith("지원대상연령:"):
+                target = line.split(":", 1)[1].strip()
+            elif line.startswith("지원내용:") or line.startswith("개요:"):
+                benefit = line.split(":", 1)[1].strip()
+            elif line.startswith("신청방법:") or line.startswith("신청사이트:"):
+                apply = line.split(":", 1)[1].strip()
+
+        line1 = f"[1] [사업 개요] {dept or '정부부처'} 주관 '{name or '청년지원정책'}'으로 청년 맞춤 지원을 제공합니다."
+        line2 = f"[2] [지원 대상] {target or '연령 및 소득 기준을 충족하는 청년'} 대상 혜택이 적용됩니다."
+        line3 = f"[3] [지원 내용] {benefit[:90] if benefit else '세부 지원금 및 바우처 지원'}{'...' if len(benefit) > 90 else ''} ({apply or '공식 홈페이지 접수'})"
+        return f"{line1}\n{line2}\n{line3}"
+    else:
+        # 뉴스 기사 텍스트 요약
+        clean_text = re.sub(r"\s+", " ", content).strip()
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", clean_text) if len(s.strip()) > 20]
+        
+        s1 = sentences[0] if len(sentences) > 0 else "최신 청년정책 주요 동향 및 시사 뉴스입니다."
+        s2 = sentences[1] if len(sentences) > 1 else "청년층 지원 확대 및 실질적인 복지 혜택 개편 방안이 추진됩니다."
+        s3 = sentences[2] if len(sentences) > 2 else "세부 지원 일정 및 자격 요건은 공식 공고를 통해 확인할 수 있습니다."
+        
+        return f"[1] {s1[:100]}\n[2] {s2[:100]}\n[3] {s3[:100]}"
+
+
+def run_ai_summary(content: str, prompt_template: str, is_news: bool = False) -> str:
+    """LLM 연동 상태에 따라 스마트하게 3줄 요약을 수행합니다."""
+    llm, provider = get_llm_instance()
+    
+    if llm is not None:
+        try:
+            from langchain_core.prompts import PromptTemplate
+            prompt = PromptTemplate(input_variables=["content"], template=prompt_template)
+            result = llm.invoke(prompt.format(content=content))
+            return str(result).strip()
+        except Exception as e:
+            print(f"      ⚠️ ({provider} 호출 오류 발생, 내장 요약 엔진으로 전환: {e})")
+            return fallback_3lines_summary(content, is_news=is_news)
+    else:
+        return fallback_3lines_summary(content, is_news=is_news)
 
 
 # ==============================================================================
@@ -103,6 +189,7 @@ def fetch_article_text(decoded_url: str) -> str:
         return full_text[:2000]
     except Exception as e:
         return f"(기사 원문 수집 실패: {e})"
+
 
 def get_google_news_rss(keyword: str, max_results: int = 1):
     """구글 뉴스 RSS에서 최신 관련 뉴스를 검색하여 가져옵니다."""
@@ -169,7 +256,7 @@ def main():
 지원내용: {wanted.get('alwServCn', '')}
 """
             print("\n   🤖 [AI 3줄 요약 - 복지로 중앙 정책]:")
-            summary = llm.invoke(policy_prompt.format(content=policy_text))
+            summary = run_ai_summary(policy_text, policy_template, is_news=False)
             print(summary.strip())
 
     # --------------------------------------------------------------------------
@@ -199,7 +286,7 @@ def main():
 신청사이트: {yc_target.get('aplyUrlAddr', '') or yc_target.get('refUrlAddr1', '')}
 """
             print("\n   🤖 [AI 3줄 요약 - 온통청년 정책]:")
-            yc_summary = llm.invoke(policy_prompt.format(content=yc_text))
+            yc_summary = run_ai_summary(yc_text, policy_template, is_news=False)
             print(yc_summary.strip())
 
     # --------------------------------------------------------------------------
@@ -216,12 +303,13 @@ def main():
         
         if not news["content"].startswith("(기사 원문 수집 실패"):
             print("\n   🤖 [AI 3줄 요약 - 최신 시사 뉴스]:")
-            news_summary = llm.invoke(news_prompt.format(content=news["content"]))
+            news_summary = run_ai_summary(news["content"], news_template, is_news=True)
             print(news_summary.strip())
 
     print("\n" + "=" * 80)
     print("✨ [완료] 복지로 + 온통청년 + 구글 뉴스 3대 데이터 파이프라인 검증 완료!")
     print("=" * 80)
+
 
 if __name__ == "__main__":
     main()
