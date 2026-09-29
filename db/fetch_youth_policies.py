@@ -2,6 +2,8 @@ import os
 import sys
 import json
 import re
+import time
+import math
 import urllib.parse
 from datetime import datetime
 import requests
@@ -17,127 +19,200 @@ load_dotenv()
 ontong_key = os.getenv("ONTONG_API_KEY")
 data_key = os.getenv("DATA_API_KEY")
 
-TODAY = "20260922"  # 오늘 기준일 (YYYYMMDD)
+# 오늘 기준일 (YYYYMMDD) - 실행 시점 기준으로 자동 생성
+TODAY = datetime.now().strftime("%Y%m%d")
 
 
 # --------------------------------------------------------------------------
-# 1. 정책 유효 상태 판별 함수 (진행중 / 예정 / 마감)
+# 0. 날짜 추출 유틸리티 함수
 # --------------------------------------------------------------------------
-def classify_policy_status(policy, today=TODAY):
+def extract_dates(text):
     """
-    정책의 신청기간(aplyYmd)과 사업기간(bizPrdEndYmd)을 분석하여
-    '진행중', '예정', '마감'으로 분류
+    문자열에서 다양한 형식의 날짜(YYYYMMDD, YYYY-MM-DD, YYYY.MM.DD 등)를 추출하여
+    8자리 YYYYMMDD 리스트로 정렬 반환
     """
+    if not text:
+        return []
+    dates = []
+    
+    # 1. YYYY-MM-DD, YYYY.MM.DD, YYYY/MM/DD, YYYY. M. D 등 구분자 있는 형식 추출
+    pattern_delim = r"(\d{4})[\.\-\/]\s*(\d{1,2})[\.\-\/]\s*(\d{1,2})"
+    for y, m, d in re.findall(pattern_delim, text):
+        dates.append(f"{y}{int(m):02d}{int(d):02d}")
+        
+    # 2. 8자리 연속 숫자 (YYYYMMDD) 추출
+    pattern_raw = r"(?<!\d)(20\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01]))(?!\d)"
+    for d in re.findall(pattern_raw, text):
+        if d not in dates:
+            dates.append(d)
+            
+    return sorted(dates)
+
+
+# --------------------------------------------------------------------------
+# 1. 정책 유효 상태 판별 함수 (현재 실행/진행중, 실행 예정, 상시 실행 vs 마감)
+# --------------------------------------------------------------------------
+def classify_policy_status(policy, today=None):
+    """
+    정책의 신청기간(aplyYmd)과 사업기간(bizPrdEndYmd, bizPrdBgngYmd)을 분석하여
+    '진행중'(현재 진행/상시 포함), '예정', '마감'으로 분류
+    """
+    if today is None:
+        today = TODAY
+
     aply_ymd = (policy.get("aplyYmd") or "").strip()
     biz_start = (policy.get("bizPrdBgngYmd") or "").strip()
     biz_end = (policy.get("bizPrdEndYmd") or "").strip()
     biz_etc = (policy.get("bizPrdEtcCn") or "").strip()
 
     # 상시/연중/예산소진시 등 계속 진행 키워드 확인
-    is_continuous = any(k in aply_ymd or k in biz_etc for k in ["상시", "연중", "소진", "계속", "수시", "별도"])
+    continuous_keywords = ["상시", "연중", "소진", "계속", "수시", "별도", "상시모집", "상시접수", "예산", "소진시", "마감시"]
+    is_continuous = any(k in aply_ymd or k in biz_etc or k in biz_end for k in continuous_keywords)
 
-    # 1. 신청 기간 내 YYYYMMDD 날짜 추출
-    clean_aply = re.sub(r"[^0-9]", " ", aply_ymd)
-    date_tokens = [t for t in clean_aply.split() if len(t) == 8 and t.startswith("20")]
+    aply_dates = extract_dates(aply_ymd)
+    biz_dates = extract_dates(f"{biz_start} {biz_end}")
 
-    if date_tokens:
-        start_date = min(date_tokens)
-        end_date = max(date_tokens)
+    # 1. 신청 기간(aplyYmd) 기준 분석
+    if aply_dates:
+        start_date = aply_dates[0]
+        end_date = aply_dates[-1]
 
         if end_date < today and not is_continuous:
             return "마감", f"신청마감({end_date})"
-        if start_date > today:
+        if start_date > today and not is_continuous:
             return "예정", f"신청예정({start_date} 오픈)"
+        if is_continuous:
+            return "진행중", f"상시/수시진행(~{end_date})"
         return "진행중", f"신청진행중(~{end_date})"
 
-    # 2. 사업 기간 기준 검사
-    if biz_end and biz_end.isdigit() and len(biz_end) == 8:
-        if biz_end < today and not is_continuous:
-            return "마감", f"사업종료({biz_end})"
-        if biz_start and biz_start > today:
-            return "예정", f"사업시작예정({biz_start})"
-        return "진행중", f"사업진행중(~{biz_end})"
+    # 2. 사업 기간(bizPrdBgngYmd, bizPrdEndYmd) 기준 분석
+    if biz_dates:
+        biz_s = biz_dates[0]
+        biz_e = biz_dates[-1]
 
-    # 날짜 명시 없는 경우 상시 진행으로 분류
+        if biz_e < today and not is_continuous:
+            return "마감", f"사업종료({biz_e})"
+        if biz_s > today and not is_continuous:
+            return "예정", f"사업시작예정({biz_s})"
+        if is_continuous:
+            return "진행중", f"상시/수시사업(~{biz_e})"
+        return "진행중", f"사업진행중(~{biz_e})"
+
+    # 3. 날짜 명시가 없는 경우 상시 모집/진행으로 분류
     return "진행중", "상시 모집/진행"
 
 
 # --------------------------------------------------------------------------
-# 2. 온통청년 API에서 유효 정책(진행중 + 예정) 수집
+# 2. 온통청년 API에서 유효 정책(현재 실행중 + 실행 예정 + 상시 진행) 전체 수집
 # --------------------------------------------------------------------------
-def fetch_ontong_valid_policies(api_key, max_pages=3):
-    """온통청년 API를 호출하여 유효한 정책만 표준 스키마로 가공하여 반환"""
-    print(f"\n📡 [온통청년 API] 유효 정책 데이터 호출 중...")
+def fetch_ontong_valid_policies(api_key, max_pages=None):
+    """
+    온통청년 API를 전체 순회 호출하여
+    현재 실행(진행) 중, 실행 예정, 상시 실행 중인 모든 유효 정책을 수집
+    """
+    print(f"\n📡 [온통청년 API] 유효 정책(진행중/예정/상시) 전체 데이터 호출 시작...")
     url = "https://www.youthcenter.go.kr/go/ythip/getPlcy"
     headers = {"User-Agent": "Mozilla/5.0"}
     
     valid_list = []
     expired_cnt = 0
+    page = 1
+    page_size = 100
+    total_pages = None
+    total_count = None
     
-    for page in range(1, max_pages + 1):
+    while True:
+        if max_pages and page > max_pages:
+            break
+            
         params = {
             "apiKeyNm": api_key,
             "pageNum": page,
-            "pageSize": 100,
+            "pageSize": page_size,
             "pageType": "1",
             "rtnType": "json"
         }
-        try:
-            r = requests.get(url, params=params, headers=headers, timeout=10)
-            if r.status_code != 200:
-                break
-            items = r.json().get("result", {}).get("youthPolicyList", [])
-            if not items:
-                break
-                
-            for item in items:
-                status, status_msg = classify_policy_status(item, TODAY)
-                
-                # '마감'된 것은 제외하고 '진행중' 및 '예정'만 수집
-                if status == "마감":
-                    expired_cnt += 1
-                    continue
+        
+        items = None
+        # 재시도 메커니즘 (네트워크 일시 오류 대비 최대 3회)
+        for attempt in range(1, 4):
+            try:
+                r = requests.get(url, params=params, headers=headers, timeout=12)
+                if r.status_code == 200:
+                    res_json = r.json().get("result", {})
+                    if total_count is None:
+                        pagging = res_json.get("pagging", {})
+                        total_count = pagging.get("totCount") or 0
+                        total_pages = math.ceil(total_count / page_size) if total_count else 30
                     
-                plcy_no = item.get("plcyNo")
-                desc = " ".join((item.get("plcyExplnCn") or "").split())
-                support = " ".join((item.get("plcySprtCn") or "").split())
-                organ = item.get("sprvsnInstCdNm") or item.get("operInstCdNm") or "정부부처/지자체"
+                    items = res_json.get("youthPolicyList", [])
+                    break
+                else:
+                    time.sleep(1)
+            except Exception as e:
+                if attempt == 3:
+                    print(f"  ❌ [{page}페이지] 호출 실패 ({attempt}/3): {e}")
+                time.sleep(1)
                 
-                min_age = item.get("sprtTrgtMinAge")
-                max_age = item.get("sprtTrgtMaxAge")
-                age_str = f"{min_age}~{max_age}세" if min_age and max_age and (min_age != "0" or max_age != "0") else "만 19세~34세 청년"
-                
-                start_date = item.get("bizPrdBgngYmd", "").strip()
-                end_date = item.get("bizPrdEndYmd", "").strip()
-                biz_period = f"{start_date} ~ {end_date}" if start_date and end_date else "상시 / 별도 공고 참조"
-                apply_period = item.get("aplyYmd", "").replace("\\N", " / ").strip() or "상시 접수 / 공고 참조"
-                
-                lclsf = item.get("lclsfNm", "") or ""
-                mclsf = item.get("mclsfNm", "") or ""
-                category_str = f"{lclsf} > {mclsf}".strip(" >")
-
-                valid_list.append({
-                    "id": f"ONTONG_{plcy_no}",
-                    "source": "온통청년 (youthcenter.go.kr)",
-                    "status": status,
-                    "status_detail": status_msg,
-                    "title": item.get("plcyNm", "제목 없음"),
-                    "category": category_str,
-                    "organization": organ,
-                    "summary": desc,
-                    "support_content": support,
-                    "target_age": age_str,
-                    "target_condition": item.get("ptcpPrpTrgtCn") or item.get("addAplyQlfcCndCn") or "해당 연령 청년 대상",
-                    "apply_period": apply_period,
-                    "business_period": biz_period,
-                    "apply_method": item.get("plcyAplyMthdCn") or "온라인/방문 신청",
-                    "apply_url": item.get("aplyUrlAddr") or item.get("refUrlAddr1") or "https://www.youthcenter.go.kr"
-                })
-        except Exception as e:
-            print(f"  ❌ 온통청년 API 호출 오류: {e}")
+        if not items:
+            # 더 이상 데이터가 없으면 종료
             break
             
-    print(f"  ✅ 온통청년: 유효 정책 {len(valid_list)}건 수집 완료 (마감 제외: {expired_cnt}건)")
+        page_valid = 0
+        page_expired = 0
+        for item in items:
+            status, status_msg = classify_policy_status(item, TODAY)
+            
+            # '마감'된 정책은 제외하고, '진행중'(상시 포함) 및 '예정'인 정책만 수집
+            if status == "마감":
+                expired_cnt += 1
+                page_expired += 1
+                continue
+                
+            plcy_no = item.get("plcyNo")
+            desc = " ".join((item.get("plcyExplnCn") or "").split())
+            support = " ".join((item.get("plcySprtCn") or "").split())
+            organ = item.get("sprvsnInstCdNm") or item.get("operInstCdNm") or "정부부처/지자체"
+            
+            min_age = item.get("sprtTrgtMinAge")
+            max_age = item.get("sprtTrgtMaxAge")
+            age_str = f"{min_age}~{max_age}세" if min_age and max_age and (min_age != "0" or max_age != "0") else "만 19세~34세 청년"
+            
+            start_date = item.get("bizPrdBgngYmd", "").strip()
+            end_date = item.get("bizPrdEndYmd", "").strip()
+            biz_period = f"{start_date} ~ {end_date}" if start_date and end_date else "상시 / 별도 공고 참조"
+            apply_period = item.get("aplyYmd", "").replace("\\N", " / ").strip() or "상시 접수 / 공고 참조"
+            
+            lclsf = item.get("lclsfNm", "") or ""
+            mclsf = item.get("mclsfNm", "") or ""
+            category_str = f"{lclsf} > {mclsf}".strip(" >")
+
+            valid_list.append({
+                "id": f"ONTONG_{plcy_no}",
+                "source": "온통청년 (youthcenter.go.kr)",
+                "status": status,
+                "status_detail": status_msg,
+                "title": item.get("plcyNm", "제목 없음"),
+                "category": category_str,
+                "organization": organ,
+                "summary": desc,
+                "support_content": support,
+                "target_age": age_str,
+                "target_condition": item.get("ptcpPrpTrgtCn") or item.get("addAplyQlfcCndCn") or "해당 연령 청년 대상",
+                "apply_period": apply_period,
+                "business_period": biz_period,
+                "apply_method": item.get("plcyAplyMthdCn") or "온라인/방문 신청",
+                "apply_url": item.get("aplyUrlAddr") or item.get("refUrlAddr1") or "https://www.youthcenter.go.kr"
+            })
+            page_valid += 1
+
+        tot_p_str = f"/{total_pages}" if total_pages else ""
+        print(f"  📄 [페이지 {page:2d}{tot_p_str}] 수집 {len(items)}건 -> 유효 {page_valid}건 (누적 유효: {len(valid_list)}건 / 마감제외: {expired_cnt}건)")
+        
+        page += 1
+        time.sleep(0.05)  # API 서버 부하 방지
+            
+    print(f"\n  ✅ 온통청년 API 수집 완료: 총 {len(valid_list)}건 유효 정책 수집 (마감 제외: {expired_cnt}건)")
     return valid_list
 
 
@@ -147,6 +222,8 @@ def fetch_ontong_valid_policies(api_key, max_pages=3):
 def fetch_data_go_kr_valid_benefits(api_key):
     """공공데이터포털의 대표 청년 복지·혜택 중 유효한 정책들을 표준 스키마로 구성"""
     print(f"\n📡 [공공데이터포털] 청년 복지·혜택 데이터 구성 중...")
+    
+    current_year = datetime.now().year
     
     # 대한민국 대표 상시/연중 유효 청년 복지 혜택 카탈로그
     public_catalog = [
@@ -183,7 +260,7 @@ def fetch_data_go_kr_valid_benefits(api_key):
             "target_age": age,
             "target_condition": cond,
             "apply_period": "상시 접수 / 연중 사업",
-            "business_period": "20260101 ~ 20261231",
+            "business_period": f"{current_year}0101 ~ {current_year}1231",
             "apply_method": method,
             "apply_url": url
         })
@@ -248,19 +325,19 @@ def merge_and_deduplicate_policies(ontong_list, public_list):
 
 
 # --------------------------------------------------------------------------
-# 5. 메인 실행: 데이터 수집 -> 정규화 -> 중복제거 -> [2026.09.22 생성시간].json 저장
+# 5. 메인 실행: 데이터 수집 -> 정규화 -> 중복제거 -> project02/backend/data/ 저장
 # --------------------------------------------------------------------------
 def main():
     now = datetime.now()
-    time_str = now.strftime("%H시%M분")  # 예: 17시16분
+    file_timestamp = now.strftime("%Y%m%d_%H%M")  # 예: 20260929_1031
     
     print("=" * 75)
     print("🚀 청년 정책·혜택 유효 데이터 수집 & 중복 제거 파이프라인 가동")
     print(f"   기준일자: {TODAY} | 실행시각: {now.strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 75)
 
-    # 1. 온통청년에서 유효 데이터 수집
-    ontong_policies = fetch_ontong_valid_policies(ontong_key, max_pages=3)
+    # 1. 온통청년에서 유효 데이터 전체 수집 (진행중, 예정, 상시)
+    ontong_policies = fetch_ontong_valid_policies(ontong_key)
 
     # 2. 공공데이터포털에서 유효 데이터 수집
     public_policies = fetch_data_go_kr_valid_benefits(data_key)
@@ -268,13 +345,23 @@ def main():
     # 3. 중복 제거 및 데이터 병합
     unified_policies = merge_and_deduplicate_policies(ontong_policies, public_policies)
 
-    # 4. 요청된 파일명 형식: [2026.09.22 생성시간].json 저장
-    output_filename = f"[2026.09.22 {time_str}].json"
-    with open(output_filename, "w", encoding="utf-8") as f:
+    # 4. 저장 경로 설정: project02/backend/data/YYYYMMDD_HHMM.json
+    # 현재 파일 위치(c:\project02\db) 기준 상위 폴더의 backend/data 디렉토리 경로 도출
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    output_dir = os.path.abspath(os.path.join(current_dir, "..", "backend", "data"))
+    os.makedirs(output_dir, exist_ok=True)
+
+    output_filename = f"{file_timestamp}.json"
+    output_filepath = os.path.join(output_dir, output_filename)
+
+    with open(output_filepath, "w", encoding="utf-8") as f:
         json.dump(unified_policies, f, ensure_ascii=False, indent=2)
 
     print("\n" + "=" * 75)
-    print(f"💾 [저장 완료] 최종 파일 생성: {output_filename}")
+    print(f"💾 [저장 완료] 최종 JSON 파일 생성 완료:")
+    print(f"   📂 저장 디렉토리: {output_dir}")
+    print(f"   📄 저장 파일명  : {output_filename}")
+    print(f"   📍 전체 파일경로: {output_filepath}")
     print("=" * 75)
 
     # 5. 상태별 통계 출력
@@ -282,10 +369,10 @@ def main():
     upcoming_cnt = sum(1 for p in unified_policies if p["status"] == "예정")
     
     print(f"📊 [통합 데이터 요약 통계]")
-    print(f"  • 🟢 현재 신청/진행 중인 정책 : {open_cnt}건")
+    print(f"  • 🟢 현재 신청/진행/상시 정책 : {open_cnt}건")
     print(f"  • 🔵 차후 시작 예정인 정책   : {upcoming_cnt}건")
     print(f"  • 📋 총 고유 유효 정책 수     : {len(unified_policies)}건")
-    print("-" * 75)
+    print("=" * 75)
 
 
 if __name__ == "__main__":
