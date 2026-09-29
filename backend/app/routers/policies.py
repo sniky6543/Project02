@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Query
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+from app.core.supabase import get_supabase_client
 
 router = APIRouter()
 
-# 3개의 샘플 정책 데이터 정의 (API 명세 및 프론트엔드 규격 일치)
 SAMPLE_POLICIES: List[Dict[str, Any]] = [
     {
         "id": "POL-2026-001",
@@ -56,21 +56,91 @@ SAMPLE_POLICIES: List[Dict[str, Any]] = [
     }
 ]
 
-@router.get("", summary="정책 목록 조회 (샘플 3개 반환)")
-@router.get("/", summary="정책 목록 조회 (샘플 3개 반환)")
+def format_row(row: dict) -> dict:
+    raw_cat = row.get("category", "주거")
+    clean_cat = raw_cat.replace("･", "·").split(">")[0].strip()
+    
+    color_map = {
+        "주거": "rose",
+        "일자리": "amber",
+        "금융·복지·문화": "emerald",
+        "교육·직업훈련": "blue",
+        "참여·기반": "purple",
+    }
+    
+    category = "주거"
+    for k in color_map:
+        if k in clean_cat:
+            category = k
+            break
+            
+    summary = row.get("summary") or row.get("benefit_summary") or row.get("support_content") or ""
+    
+    return {
+        "id": row.get("id"),
+        "title": row.get("title"),
+        "organization": row.get("organization", "정부부처/지자체"),
+        "category": category,
+        "categoryBadgeColor": color_map.get(category, "indigo"),
+        "status": row.get("status", "상시모집"),
+        "dDay": "접수중" if row.get("status") == "접수중" else None,
+        "benefitSummary": summary,
+        "targetAge": row.get("target_age") or f"만 {row.get('min_age', 19)}세 ~ {row.get('max_age', 34)}세",
+        "incomeCondition": row.get("target_condition") or row.get("income_condition") or "소득 무관",
+        "employmentCondition": row.get("employment_condition", "제한없음"),
+        "matchScore": 85,
+        "viewCount": row.get("view_count", 0),
+        "isBookmarked": False
+    }
+
+@router.get("", summary="정책 목록 조회 (Supabase 연동 + Fallback)")
+@router.get("/", summary="정책 목록 조회 (Supabase 연동 + Fallback)")
 async def get_policies(
     keyword: Optional[str] = Query(None, description="검색 키워드"),
     category: Optional[str] = Query(None, description="카테고리 필터"),
     page: int = Query(1, ge=1, description="페이지 번호"),
     limit: int = Query(10, ge=1, le=100, description="페이지당 개수")
 ):
-    """
-    청년 정책 목록을 조회하며, 기본 샘플 정책 3개를 반환합니다.
-    """
+    supabase = get_supabase_client()
+    
+    if supabase:
+        for table_name in ["unified_policies", "policies"]:
+            try:
+                query = supabase.table(table_name).select("*", count="exact")
+                if category and category != "전체":
+                    query = query.ilike("category", f"%{category}%")
+                if keyword:
+                    query = query.ilike("title", f"%{keyword}%")
+                    
+                offset = (page - 1) * limit
+                query = query.range(offset, offset + limit - 1)
+                
+                response = query.execute()
+                
+                if response.data and len(response.data) > 0:
+                    policies = [format_row(r) for r in response.data]
+                    total_count = response.count or len(policies)
+                    total_pages = (total_count + limit - 1) // limit
+                    
+                    return {
+                        "success": True,
+                        "statusCode": 200,
+                        "message": f"Supabase ({table_name})에서 정책 목록을 성공적으로 조회했습니다.",
+                        "data": {
+                            "totalCount": total_count,
+                            "currentPage": page,
+                            "totalPages": total_pages,
+                            "policies": policies
+                        },
+                        "timestamp": datetime.utcnow().isoformat() + "Z"
+                    }
+            except Exception:
+                continue
+
     return {
         "success": True,
         "statusCode": 200,
-        "message": "정책 목록을 성공적으로 조회했습니다.",
+        "message": "정책 목록을 성공적으로 조회했습니다 (Mock Fallback).",
         "data": {
             "totalCount": len(SAMPLE_POLICIES),
             "currentPage": page,
