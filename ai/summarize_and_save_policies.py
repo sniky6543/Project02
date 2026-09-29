@@ -297,6 +297,7 @@ def main():
     parser.add_argument("--source", choices=["api", "file"], default="api", help="데이터 원본 (api: 실시간 API, file: 기존 JSON 파일)")
     parser.add_argument("--limit", type=int, default=3, help="수집/요약할 정책 개수 (기본: 3건)")
     parser.add_argument("--output", type=str, default=None, help="결과를 저장할 JSON 파일 경로")
+    parser.add_argument("--to-supabase", action="store_true", help="요약 완료 후 Supabase 데이터베이스에 자동 Upsert 저장")
 
     args = parser.parse_args()
 
@@ -366,6 +367,25 @@ def main():
         print("\n🔍 [저장된 JSON 스키마 미리보기 - 1번 레코드]")
         print(json.dumps(summarized_dataset[0], ensure_ascii=False, indent=2))
 
+    # 6. Supabase DB 저장 (옵션)
+    if args.to_supabase:
+        print("\n" + "=" * 80)
+        print("☁️ [Supabase 동기화] Supabase DB 업로드 시작")
+        print("=" * 80)
+        try:
+            from save_to_supabase import SupabasePolicyUploader
+        except ImportError:
+            sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+            from save_to_supabase import SupabasePolicyUploader
+
+        uploader = SupabasePolicyUploader()
+        res = uploader.upsert_policies(summarized_dataset)
+        if res.get("success"):
+            print(f"🎉 Supabase 저장 완료: {res.get('inserted_count')}건")
+        else:
+            print(f"⚠️ Supabase 저장 알림: {res.get('message')}")
+
 
 if __name__ == "__main__":
     main()
+
