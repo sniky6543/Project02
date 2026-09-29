@@ -1,10 +1,13 @@
 import React, { useEffect } from 'react';
+import { useProfileNickname } from '../utils/profileStorage';
 
 interface HomeViewProps {
   onNavigate?: (path: string) => void;
 }
 
 export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
+  const nickname = useProfileNickname('');
+  const hasNickname = Boolean(nickname && nickname.trim());
   
   useEffect(() => {
     const handleDataPath = (e: MouseEvent) => {
@@ -33,13 +36,30 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
 <div className="space-y-2.5 max-w-2xl">
 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/80 border border-sky-200/70 shadow-xs text-sky-800 text-xs font-semibold backdrop-blur-md">
 <span className="flex h-2 w-2 relative"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-teal-500"></span></span>
-<span className="">2025 청년 자립 특별 플랜 분석 완료</span>
+<span className="">{hasNickname ? '2025 청년 자립 특별 플랜 분석 완료' : '맞춤 큐레이션을 위한 프로필 설정 안내'}</span>
 </div>
 <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight leading-snug">
-            김민우님을 위한 맞춤 정책 <span className="text-sky-600 underline decoration-sky-300 decoration-wavy underline-offset-4">18건</span>이 준비되었습니다
+            {hasNickname ? (
+              <>
+                <span className="text-sky-600">{nickname}</span>님을 위한 맞춤 정책 <span className="text-sky-600 underline decoration-sky-300 decoration-wavy underline-offset-4">18건</span>이 준비되었습니다
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onNavigate?.('profile')}
+                  className="text-sky-600 hover:text-sky-700 underline decoration-sky-300 decoration-wavy underline-offset-4 transition-colors cursor-pointer text-left inline"
+                >
+                  프로필을 설정
+                </button>
+                하고 나만을 위한 맞춤 정책을 확인해보세요
+              </>
+            )}
           </h1>
 <p className="text-slate-600 text-sm md:text-base leading-relaxed">
-            소득 수준 및 무주택 단독 세대주 기준 자동 산출 결과, 올 한 해 최대 혜택을 설계해 드립니다.
+            {hasNickname
+              ? '소득 수준 및 무주택 단독 세대주 기준 자동 산출 결과, 올 한 해 최대 혜택을 설계해 드립니다.'
+              : '나이, 거주지, 소득 및 관심 분야를 프로필에 입력하시면 청년기본법 기준 최적의 혜택을 찾아드립니다.'}
           </p>
 </div>
 {/* Graphic & Metric Badge Card */}
