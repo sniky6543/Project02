@@ -27,17 +27,21 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 from dotenv import load_dotenv
 load_dotenv()
 
-# 클라이언트 임포트 (ai 또는 backend/app)
+# 클라이언트 임포트 (ai.pipeline, 로컬 폴더, ai 또는 backend/app)
 try:
-    from ai.bokjiro_client import BokjiroClient
-    from ai.youthcenter_client import YouthCenterClient
+    from ai.pipeline.bokjiro_client import BokjiroClient
+    from ai.pipeline.youthcenter_client import YouthCenterClient
 except ImportError:
     try:
         from bokjiro_client import BokjiroClient
         from youthcenter_client import YouthCenterClient
     except ImportError:
-        from backend.app.bokjiro_client import BokjiroClient
-        from backend.app.youthcenter_client import YouthCenterClient
+        try:
+            from ai.bokjiro_client import BokjiroClient
+            from ai.youthcenter_client import YouthCenterClient
+        except ImportError:
+            from backend.app.bokjiro_client import BokjiroClient
+            from backend.app.youthcenter_client import YouthCenterClient
 
 
 # ==============================================================================
@@ -348,18 +352,9 @@ def main():
     with open(save_path, "w", encoding="utf-8") as f:
         json.dump(summarized_dataset, f, ensure_ascii=False, indent=2)
 
-    # db/ 디렉토리에도 동기화 복사본 저장
-    db_copy_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "db", "summarized_policies.json")
-    try:
-        with open(db_copy_path, "w", encoding="utf-8") as f:
-            json.dump(summarized_dataset, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
     print("\n" + "=" * 80)
     print(f"🎉 [성공] 총 {len(summarized_dataset)}건의 요약 데이터가 JSON 파일로 저장되었습니다!")
-    print(f"📁 저장 경로 1 (AI 디렉토리): {save_path}")
-    print(f"📁 저장 경로 2 (DB 디렉토리): {db_copy_path}")
+    print(f"📁 저장 경로: {save_path}")
     print("=" * 80)
 
     # 5. 샘플 출력 (첫 번째 항목)
@@ -373,10 +368,13 @@ def main():
         print("☁️ [Supabase 동기화] Supabase DB 업로드 시작")
         print("=" * 80)
         try:
-            from save_to_supabase import SupabasePolicyUploader
+            from ai.pipeline.save_to_supabase import SupabasePolicyUploader
         except ImportError:
-            sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-            from save_to_supabase import SupabasePolicyUploader
+            try:
+                from save_to_supabase import SupabasePolicyUploader
+            except ImportError:
+                sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+                from save_to_supabase import SupabasePolicyUploader
 
         uploader = SupabasePolicyUploader()
         res = uploader.upsert_policies(summarized_dataset)

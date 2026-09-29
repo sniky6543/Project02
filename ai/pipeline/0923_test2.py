@@ -28,17 +28,22 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 from langchain_community.llms import Ollama
 from langchain_core.prompts import PromptTemplate
 
-# 유연한 임포트 (ai 디렉토리, 로컬, backend/app 모두 지원)
+# 유연한 임포트 (ai.pipeline, 로컬 폴더, ai 디렉토리, backend/app 모두 지원)
 try:
-    from ai.bokjiro_client import BokjiroClient
-    from ai.youthcenter_client import YouthCenterClient
+    from ai.pipeline.bokjiro_client import BokjiroClient
+    from ai.pipeline.youthcenter_client import YouthCenterClient
 except ImportError:
     try:
         from bokjiro_client import BokjiroClient
         from youthcenter_client import YouthCenterClient
     except ImportError:
-        from backend.app.bokjiro_client import BokjiroClient
-        from backend.app.youthcenter_client import YouthCenterClient
+        try:
+            from ai.bokjiro_client import BokjiroClient
+            from ai.youthcenter_client import YouthCenterClient
+        except ImportError:
+            from backend.app.bokjiro_client import BokjiroClient
+            from backend.app.youthcenter_client import YouthCenterClient
+
 
 
 # ==============================================================================
