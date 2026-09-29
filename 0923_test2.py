@@ -14,8 +14,16 @@ import bs4
 from googlenewsdecoder import gnewsdecoder
 from langchain_community.llms import Ollama
 from langchain_core.prompts import PromptTemplate
-from backend.app.bokjiro_client import BokjiroClient
-from backend.app.youthcenter_client import YouthCenterClient
+try:
+    from ai.bokjiro_client import BokjiroClient
+    from ai.youthcenter_client import YouthCenterClient
+except ImportError:
+    try:
+        from bokjiro_client import BokjiroClient
+        from youthcenter_client import YouthCenterClient
+    except ImportError:
+        from backend.app.bokjiro_client import BokjiroClient
+        from backend.app.youthcenter_client import YouthCenterClient
 
 # Windows 콘솔 인코딩 대응
 if sys.platform == "win32":
