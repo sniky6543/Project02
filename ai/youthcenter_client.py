@@ -12,6 +12,9 @@ import requests
 from dotenv import load_dotenv
 
 # Windows 콘솔 인코딩 대응
+from pathlib import Path
+
+# Windows 콘솔 인코딩 대응
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -19,11 +22,16 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-load_dotenv()
+# 상위 디렉토리의 .env 파일까지 포함하여 로드
+root_env = Path(__file__).resolve().parent.parent / ".env"
+if root_env.exists():
+    load_dotenv(dotenv_path=root_env)
+else:
+    load_dotenv()
 
 class YouthCenterClient:
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.getenv("YOUTHCENTER_API_KEY") or ""
+        self.api_key = api_key or os.getenv("YOUTHCENTER_API_KEY") or os.getenv("ONTONG_API_KEY") or ""
         self.base_url = "https://www.youthcenter.go.kr/go/ythip"
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"

@@ -12,6 +12,8 @@ from typing import Dict, Any, List, Optional
 import requests
 from dotenv import load_dotenv
 
+from pathlib import Path
+
 # Windows 콘솔 인코딩 대응
 if sys.platform == "win32":
     try:
@@ -20,11 +22,22 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-load_dotenv()
+# 상위 디렉토리의 .env 파일까지 포함하여 로드
+root_env = Path(__file__).resolve().parent.parent / ".env"
+if root_env.exists():
+    load_dotenv(dotenv_path=root_env)
+else:
+    load_dotenv()
 
 class BokjiroClient:
     def __init__(self, service_key: Optional[str] = None):
-        raw_key = service_key or os.getenv("BOKJIRO_API_KEY") or os.getenv("DATA_GO_KR_API_KEY") or ""
+        raw_key = (
+            service_key
+            or os.getenv("BOKJIRO_API_KEY")
+            or os.getenv("DATA_API_KEY")
+            or os.getenv("DATA_GO_KR_API_KEY")
+            or ""
+        )
         # requests params 사용 시 requests가 자체 인코딩하므로 디코딩된 키 사용
         self.service_key = urllib.parse.unquote(raw_key).strip()
         
