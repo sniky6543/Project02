@@ -1,4 +1,18 @@
 # 프론트엔드 연결 없이 단일 파이썬 파일로 AI 요약 기능을 검증하는 코드입니다.
+import sys
+import warnings
+
+# Windows 콘솔 인코딩 대응 (한글 및 이모지 깨짐 방지)
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+# LangChain 버전 관련 단순 경고 억제
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 from langchain_community.llms import Ollama # 로컬 LLM(Ollama)을 호출하기 위한 모듈입니다.
 from langchain_core.prompts import PromptTemplate # AI에게 내릴 구체적인 지시서(프롬프트) 양식을 만듭니다.
 
