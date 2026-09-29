@@ -1,5 +1,5 @@
 """
-summary_test.py: 
+0923_test2.py: 
 [청년 정책 & 뉴스 통합 AI 요약 파이프라인]
 1. 복지로 공공데이터 API 연동 (중앙부처 & 지자체 복지서비스) + AI 3줄 요약
 2. 온통청년 오픈 API 연동 (대한민국 전체 청년정책 포털 실데이터) + AI 3줄 요약
@@ -7,13 +7,28 @@ summary_test.py:
 """
 
 import sys
+import warnings
 import urllib.parse
 import feedparser
 import requests
 import bs4
 from googlenewsdecoder import gnewsdecoder
+
+# Windows 콘솔 인코딩 대응 (한글 및 특수문자 깨짐 방지)
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+# LangChain 버전 관련 경고 억제
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 from langchain_community.llms import Ollama
 from langchain_core.prompts import PromptTemplate
+
+# 유연한 임포트 (ai 디렉토리, 로컬, backend/app 모두 지원)
 try:
     from ai.bokjiro_client import BokjiroClient
     from ai.youthcenter_client import YouthCenterClient
@@ -24,10 +39,6 @@ except ImportError:
     except ImportError:
         from backend.app.bokjiro_client import BokjiroClient
         from backend.app.youthcenter_client import YouthCenterClient
-
-# Windows 콘솔 인코딩 대응
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
 
 
 # ==============================================================================
