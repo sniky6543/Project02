@@ -1,20 +1,67 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { getPolicies, toggleBookmark } from '../api/supabasePolicies';
+import { PolicyItem, PolicyCategory } from '../types/policy';
+import { usePersonalizedPolicies } from '../utils/policyMatcher';
 
 interface ExploreViewProps {
-  onNavigate?: (path: string) => void;
+  onNavigate?: (path: string, policyId?: string) => void;
 }
 
-export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
-  const [isFilterOpen, setIsFilterOpen] = useState(true);
+type SortOption = 'matchScore' | 'deadline' | 'latest' | 'popular';
 
+export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+
+  // DB 데이터 및 로딩 상태
+  const [rawPolicies, setRawPolicies] = useState<PolicyItem[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+
+  // 사용자 프로필 정보 기반 맞춤 점수 계산 및 우선순위 정렬
+  const { policies, profile, hasProfile } = usePersonalizedPolicies(rawPolicies);
+
+  // 검색 & 필터 상태
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [activeSearch, setActiveSearch] = useState<string>('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('전체');
+  const [selectedRegion, setSelectedRegion] = useState<string>('');
+  const [ageInput, setAgeInput] = useState<string>('');
+  const [selectedEmployment, setSelectedEmployment] = useState<string>('제한없음');
+  const [selectedSpecial, setSelectedSpecial] = useState<string>('제한없음');
+  const [sortBy, setSortBy] = useState<SortOption>('matchScore');
+
+  // 북마크 상태 관리 (로컬 Set)
+  const [bookmarkedIds, setBookmarkedIds] = useState<Set<string>>(new Set());
+
+  // 페이지네이션
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const pageSize = 8;
+
+  // 1. Supabase 실데이터 로드
+  useEffect(() => {
+    async function loadData() {
+      setLoading(true);
+      try {
+        const data = await getPolicies({ limit: 200 });
+        setRawPolicies(data);
+      } catch (err) {
+        console.error('Failed to load policies in ExploreView:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadData();
+  }, []);
+
+  // data-path 클릭 이벤트 핸들링
   useEffect(() => {
     const handleDataPath = (e: MouseEvent) => {
       const target = (e.target as HTMLElement).closest('[data-path]');
       if (target) {
         const path = target.getAttribute('data-path');
+        const pId = target.getAttribute('data-policy-id');
         if (path && onNavigate) {
           e.preventDefault();
-          onNavigate(path);
+          onNavigate(path, pId || undefined);
         }
       }
     };
@@ -22,18 +69,154 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
     return () => document.removeEventListener('click', handleDataPath);
   }, [onNavigate]);
 
+  // 카테고리별 실시간 개수 계산
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {
+      전체: policies.length,
+      일자리: 0,
+      주거: 0,
+      '교육·직업훈련': 0,
+      '금융·복지·문화': 0,
+      '참여·기반': 0,
+    };
+    policies.forEach((p) => {
+      if (counts[p.category] !== undefined) {
+        counts[p.category] += 1;
+      }
+    });
+    return counts;
+  }, [policies]);
+
+  // 필터링된 정책 목록
+  const filteredPolicies = useMemo(() => {
+    let result = [...policies];
+
+    // 키워드 검색
+    if (activeSearch.trim()) {
+      const q = activeSearch.trim().toLowerCase();
+      result = result.filter(
+        (p) =>
+          p.title.toLowerCase().includes(q) ||
+          p.benefitSummary.toLowerCase().includes(q) ||
+          p.organization.toLowerCase().includes(q)
+      );
+    }
+
+    // 카테고리 필터
+    if (selectedCategory !== '전체') {
+      result = result.filter((p) => p.category === selectedCategory);
+    }
+
+    // 연령 필터
+    if (ageInput) {
+      const ageNum = parseInt(ageInput, 10);
+      if (!isNaN(ageNum)) {
+        result = result.filter((p) => {
+          if (!p.targetAge || p.targetAge.includes('무관') || p.targetAge.includes('전체')) return true;
+          // 연령 추출
+          const numbers = p.targetAge.match(/\d+/g)?.map(Number);
+          if (numbers && numbers.length >= 2) {
+            return ageNum >= numbers[0] && ageNum <= numbers[1];
+          }
+          return true;
+        });
+      }
+    }
+
+    // 취업 상태 필터
+    if (selectedEmployment !== '제한없음') {
+      result = result.filter(
+        (p) =>
+          p.employmentCondition.includes('제한') ||
+          p.employmentCondition.includes('무관') ||
+          p.employmentCondition.includes(selectedEmployment)
+      );
+    }
+
+    // 정렬
+    if (sortBy === 'deadline') {
+      result.sort((a, b) => {
+        if (a.dDay && !b.dDay) return -1;
+        if (!a.dDay && b.dDay) return 1;
+        return 0;
+      });
+    } else if (sortBy === 'popular') {
+      result.sort((a, b) => (b.viewCount || 0) - (a.viewCount || 0));
+    } else if (sortBy === 'matchScore') {
+      result.sort((a, b) => (b.matchScore || 85) - (a.matchScore || 85));
+    }
+
+    return result;
+  }, [policies, activeSearch, selectedCategory, ageInput, selectedEmployment, sortBy]);
+
+  // 페이지네이션 슬라이스
+  const totalPages = Math.max(1, Math.ceil(filteredPolicies.length / pageSize));
+  const paginatedPolicies = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredPolicies.slice(start, start + pageSize);
+  }, [filteredPolicies, currentPage, pageSize]);
+
+  // 검색 실행 핸들러
+  const handleSearch = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setActiveSearch(searchTerm);
+    setCurrentPage(1);
+  };
+
+  // 필터 초기화
+  const handleResetFilters = () => {
+    setSearchTerm('');
+    setActiveSearch('');
+    setSelectedCategory('전체');
+    setSelectedRegion('');
+    setAgeInput('');
+    setSelectedEmployment('제한없음');
+    setSelectedSpecial('제한없음');
+    setSortBy('matchScore');
+    setCurrentPage(1);
+  };
+
+  // 북마크 클릭
+  const handleBookmarkToggle = async (policyId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const isCurrentlyBookmarked = bookmarkedIds.has(policyId);
+
+    // 로컬 상태 즉시 변경
+    setBookmarkedIds((prev) => {
+      const next = new Set(prev);
+      if (isCurrentlyBookmarked) {
+        next.delete(policyId);
+      } else {
+        next.add(policyId);
+      }
+      return next;
+    });
+
+    await toggleBookmark('guest_user', policyId);
+  };
+
+  const categories = [
+    { key: '전체', label: '전체', icon: '✨', count: categoryCounts['전체'] || 0 },
+    { key: '일자리', label: '일자리', icon: '💼', count: categoryCounts['일자리'] || 0 },
+    { key: '주거', label: '주거', icon: '🏡', count: categoryCounts['주거'] || 0 },
+    { key: '교육·직업훈련', label: '교육·직업훈련', icon: '🎓', count: categoryCounts['교육·직업훈련'] || 0 },
+    { key: '금융·복지·문화', label: '금융·복지·문화', icon: '🪙', count: categoryCounts['금융·복지·문화'] || 0 },
+    { key: '참여·기반', label: '참여·기반', icon: '💬', count: categoryCounts['참여·기반'] || 0 },
+  ];
+
   return (
     <main className="w-full pt-16 bg-surface min-h-[calc(100vh-16rem)] mt-5">
       <div className="flex flex-col w-full">
         {/* Subtle Ambient Glow Orbs */}
-        <div className="relative w-full max-w-[1200px] mx-auto">
-          <div className="absolute top-10 left-1/4 -z-10 w-96 h-96 bg-primary-fixed/30 rounded-full blur-3xl pointer-events-none"></div>
-          <div className="absolute top-32 right-10 -z-10 w-80 h-80 bg-secondary-fixed/30 rounded-full blur-3xl pointer-events-none"></div>
+        <div className="relative w-full max-w-[1200px] mx-auto px-4 md:px-0">
+          <div className="absolute top-10 left-1/4 -z-10 w-96 h-96 bg-sky-200/30 rounded-full blur-3xl pointer-events-none"></div>
+          <div className="absolute top-32 right-10 -z-10 w-80 h-80 bg-teal-200/30 rounded-full blur-3xl pointer-events-none"></div>
 
           {/* Header Banner */}
           <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-sky-100/70 via-indigo-50/50 to-teal-50/70 p-6 md:p-8 border border-sky-200/60 shadow-sm shadow-sky-100/50 mb-space-lg">
             <div className="absolute -right-8 -top-10 w-72 h-72 rounded-full bg-teal-200/30 blur-3xl pointer-events-none"></div>
             <div className="absolute left-1/3 -bottom-10 w-64 h-64 rounded-full bg-sky-200/40 blur-3xl pointer-events-none"></div>
+
             <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
               <div className="space-y-2.5">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/80 border border-sky-200/70 shadow-xs text-sky-800 text-xs font-semibold backdrop-blur-md">
@@ -41,15 +224,19 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span>
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-teal-500"></span>
                   </span>
-                  <span>2025 맞춤 정책 실시간 탐색 완료</span>
+                  <span>Supabase DB 실시간 정책 탐색 시스템</span>
                 </div>
                 <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight leading-snug">
-                  나에게 꼭 맞는 청년 정책 탐색 <span className="text-sky-600 underline decoration-sky-300 decoration-wavy underline-offset-4">4건</span>
+                  나에게 꼭 맞는 청년 정책 탐색{' '}
+                  <span className="text-sky-600 underline decoration-sky-300 decoration-wavy underline-offset-4">
+                    {loading ? '조회중...' : `${filteredPolicies.length}건`}
+                  </span>
                 </h1>
-                <p className="text-slate-600 text-sm md:text-base leading-relaxed whitespace-nowrap">
-                  소득 수준, 취업 상태 및 거주 지역 기준 자동 필터링 결과, 나에게 가장 유리한 청년 정책을 추천해 드립니다.
+                <p className="text-slate-600 text-sm md:text-base leading-relaxed">
+                  온통청년 및 공공데이터포털 복지로 API에서 동기화된 총 {policies.length}건의 실시간 정책을 검색·필터링합니다.
                 </p>
               </div>
+
               <div className="flex items-center gap-4 bg-white/90 backdrop-blur-md rounded-2xl p-4 md:p-5 border border-sky-100 shadow-md shadow-sky-100/60 shrink-0 self-start md:self-auto">
                 <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200/60 flex items-center justify-center shadow-inner shrink-0 text-amber-500">
                   <svg className="w-8 h-8 text-amber-500 drop-shadow-sm" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
@@ -60,11 +247,13 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
                 <div className="pr-1">
                   <div className="flex items-center gap-1.5 mb-0.5">
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                    <span className="text-xs font-medium text-slate-500">실시간 매칭 완료</span>
+                    <span className="text-xs font-medium text-slate-500">검색 조건 매칭</span>
                   </div>
                   <div className="flex items-baseline gap-1">
-                    <span className="text-xs font-medium text-slate-500 mr-1">맞춤 정책</span>
-                    <span className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight">42</span>
+                    <span className="text-xs font-medium text-slate-500 mr-1">조회 결과</span>
+                    <span className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight">
+                      {filteredPolicies.length}
+                    </span>
                     <span className="text-sm font-bold text-sky-600">건</span>
                   </div>
                 </div>
@@ -73,11 +262,30 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
           </div>
 
           {/* Search Bar with Accordion Filter Toggle */}
-          <div className="bg-white p-2.5 rounded-2xl border border-sky-200/70 shadow-sm flex flex-col md:flex-row items-center gap-2 mb-space-md">
+          <form onSubmit={handleSearch} className="bg-white p-2.5 rounded-2xl border border-sky-200/70 shadow-sm flex flex-col md:flex-row items-center gap-2 mb-space-md">
             <div className="flex-1 flex items-center w-full px-3.5 py-2 gap-2.5">
-              <span className="material-symbols-outlined text-sky-600 text-[24px]">search</span>
-              <input className="w-full bg-transparent text-slate-800 placeholder:text-slate-400 text-sm focus:outline-none" placeholder="키워드나 정책명을 입력하세요 (예: 청년월세, 구직활동지원금, 전세보증금, 디딤돌대출)" type="text" defaultValue="청년 주거 및 취업지원" />
+              <span className="text-sky-600 text-lg">🔍</span>
+              <input
+                className="w-full bg-transparent text-slate-800 placeholder:text-slate-400 text-sm focus:outline-none"
+                placeholder="키워드나 정책명을 입력하세요 (예: 월세, 인턴십, 저작권, AI, 자산형성, 부트캠프)"
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+              {searchTerm && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchTerm('');
+                    setActiveSearch('');
+                  }}
+                  className="text-slate-400 hover:text-slate-600 text-xs px-2 py-1"
+                >
+                  ✕
+                </button>
+              )}
             </div>
+
             <div className="flex items-center gap-2 w-full md:w-auto justify-end">
               <button
                 onClick={() => setIsFilterOpen(!isFilterOpen)}
@@ -87,22 +295,30 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
                   }`}
                 type="button"
               >
-                <span className="material-symbols-outlined text-[18px]">tune</span>
+                <span>⚙️</span>
                 <span>{isFilterOpen ? '상세 필터 닫기' : '상세 필터 열기'}</span>
-                <span className={`material-symbols-outlined text-[16px] transition-transform duration-300 ${isFilterOpen ? 'rotate-180' : ''}`}>
-                  expand_more
+                <span className={`text-xs transition-transform duration-300 ${isFilterOpen ? 'rotate-180' : ''}`}>
+                  ▼
                 </span>
               </button>
-              <button className="flex items-center gap-1 px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 font-semibold text-xs transition-colors cursor-pointer" id="resetFilterBtn" type="button">
-                <span className="material-symbols-outlined text-[18px]">restart_alt</span>
-                <span>필터 초기화</span>
+
+              <button
+                onClick={handleResetFilters}
+                className="flex items-center gap-1 px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 font-semibold text-xs transition-colors cursor-pointer"
+                type="button"
+              >
+                <span>🔄</span>
+                <span>초기화</span>
               </button>
-              <button className="flex items-center justify-center gap-1.5 px-6 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs shadow-sm transition-all cursor-pointer w-full md:w-auto" type="button">
-                <span className="material-symbols-outlined text-[18px]">manage_search</span>
+
+              <button
+                type="submit"
+                className="flex items-center justify-center gap-1.5 px-6 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs shadow-sm transition-all cursor-pointer w-full md:w-auto"
+              >
                 <span>검색</span>
               </button>
             </div>
-          </div>
+          </form>
 
           {/* Multi-dimensional Custom Filter Console (Accordion Format) */}
           <section className="bg-white rounded-2xl shadow-sm mb-space-xl overflow-hidden border border-sky-100 transition-all duration-300">
@@ -112,14 +328,16 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
               className="flex items-center justify-between px-6 py-3.5 bg-gradient-to-r from-sky-50/70 to-indigo-50/40 border-b border-sky-100 cursor-pointer select-none hover:bg-sky-50/90 transition-colors"
             >
               <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-sky-600 text-[20px]">filter_alt</span>
-                <span className="font-bold text-slate-900 text-sm">맞춤 상세 조건 필터</span>
-                <span className="px-2 py-0.5 rounded-full bg-sky-100 text-sky-700 text-[11px] font-bold">8개 항목</span>
+                <span className="text-sky-600">🎯</span>
+                <span className="font-bold text-slate-900 text-sm">분야 및 맞춤 조건 필터</span>
+                <span className="px-2 py-0.5 rounded-full bg-sky-100 text-sky-700 text-[11px] font-bold">
+                  {selectedCategory !== '전체' ? `${selectedCategory} 선택됨` : '전체 분야'}
+                </span>
               </div>
               <div className="flex items-center gap-1 text-xs font-semibold text-sky-600 hover:text-sky-700">
                 <span>{isFilterOpen ? '필터 접기' : '필터 펼치기'}</span>
-                <span className={`material-symbols-outlined text-[18px] transition-transform duration-300 ${isFilterOpen ? 'rotate-180' : ''}`}>
-                  expand_more
+                <span className={`text-xs transition-transform duration-300 ${isFilterOpen ? 'rotate-180' : ''}`}>
+                  ▼
                 </span>
               </div>
             </div>
@@ -127,131 +345,96 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
             {/* Accordion Content */}
             {isFilterOpen && (
               <div>
-                <div className="px-6 md:px-8 py-2 space-y-1.5 text-sm text-slate-600">
-                  {/* 1. Category */}
-                  <div className="flex flex-col md:flex-row items-start md:items-center gap-3 pb-1.5 border-b border-dashed border-sky-100">
+                <div className="px-6 md:px-8 py-4 space-y-3 text-sm text-slate-600">
+                  {/* 1. Category Tabs */}
+                  <div className="flex flex-col md:flex-row items-start md:items-center gap-3 pb-2.5 border-b border-dashed border-sky-100">
                     <label className="w-24 font-bold text-slate-900 text-sm flex-shrink-0 pt-1 md:pt-0">카테고리</label>
                     <div className="flex flex-wrap gap-2 flex-1">
-                      <button className="border border-sky-600 bg-sky-600 text-white rounded-full px-4 py-1 text-xs font-semibold shadow-xs transition-colors cursor-pointer" type="button">전체 (18)</button>
-                      <button className="border border-amber-200 rounded-full px-4 py-1 text-xs text-amber-800 bg-amber-50 hover:bg-amber-100 font-medium transition-colors cursor-pointer" type="button">일자리 (6)</button>
-                      <button className="border border-rose-200 rounded-full px-4 py-1 text-xs text-rose-800 bg-rose-50 hover:bg-rose-100 font-medium transition-colors cursor-pointer" type="button">주거 (5)</button>
-                      <button className="border border-emerald-200 rounded-full px-4 py-1 text-xs text-emerald-800 bg-emerald-50 hover:bg-emerald-100 font-medium transition-colors cursor-pointer" type="button">교육·직업훈련 (3)</button>
-                      <button className="border border-purple-200 rounded-full px-4 py-1 text-xs text-purple-800 bg-purple-50 hover:bg-purple-100 font-medium transition-colors cursor-pointer" type="button">금융·복지·문화 (4)</button>
-                      <button className="border border-sky-200 rounded-full px-4 py-1 text-xs text-sky-800 bg-sky-50 hover:bg-sky-100 font-medium transition-colors cursor-pointer" type="button">참여·기반</button>
+                      {categories.map((cat) => {
+                        const isSelected = selectedCategory === cat.key;
+                        return (
+                          <button
+                            key={cat.key}
+                            type="button"
+                            onClick={() => {
+                              setSelectedCategory(cat.key);
+                              setCurrentPage(1);
+                            }}
+                            className={`rounded-full px-4 py-1 text-xs font-semibold shadow-xs transition-colors cursor-pointer ${isSelected
+                              ? 'bg-sky-600 text-white border border-sky-600'
+                              : 'border border-slate-200 bg-white hover:bg-sky-50 text-slate-700'
+                              }`}
+                          >
+                            {cat.icon} {cat.label} ({cat.count})
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 
-                  {/* 2. Region & Marital */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-1.5 border-b border-dashed border-sky-100 items-center">
-                    <div className="flex items-center gap-3">
-                      <label className="w-24 font-bold text-slate-900 text-sm flex-shrink-0">지역</label>
-                      <div className="flex items-center gap-2 flex-1 max-w-sm">
-                        <div className="relative flex-1">
-                          <select className="w-full appearance-none bg-slate-50/60 border border-slate-200 rounded-xl px-3.5 py-1.5 pr-9 text-xs text-slate-700 focus:outline-none focus:border-sky-500 cursor-pointer">
-                            <option>선택하세요.</option>
-                            <option>서울특별시</option>
-                            <option>경기도</option>
-                            <option>인천광역시</option>
-                            <option>부산광역시</option>
-                            <option>대구광역시</option>
-                            <option>대전광역시</option>
-                            <option>광주광역시</option>
-                          </select>
-                          <span className="material-symbols-outlined pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[18px] text-slate-400">expand_more</span>
-                        </div>
-                        <button className="bg-sky-600 hover:bg-sky-700 text-white px-4 py-1.5 rounded-xl text-xs font-semibold transition-colors flex-shrink-0 cursor-pointer" type="button">선택</button>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <label className="w-24 font-bold text-slate-900 text-sm flex-shrink-0">혼인여부</label>
-                      <div className="relative flex-1 max-w-xs">
-                        <select className="w-full appearance-none bg-slate-50/60 border border-slate-200 rounded-xl px-3.5 py-1.5 pr-9 text-xs text-slate-700 focus:outline-none focus:border-sky-500 cursor-pointer">
-                          <option>선택하세요.</option>
-                          <option>미혼</option>
-                          <option>기혼</option>
-                          <option>기타</option>
-                        </select>
-                        <span className="material-symbols-outlined pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[18px] text-slate-400">expand_more</span>
-                      </div>
+                  {/* 2. Age Filter */}
+                  <div className="flex flex-col md:flex-row items-start md:items-center gap-3 pb-2.5 border-b border-dashed border-sky-100">
+                    <label className="w-24 font-bold text-slate-900 text-sm flex-shrink-0">대상 연령</label>
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-slate-600">만</span>
+                      <input
+                        className="w-24 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-center text-xs focus:outline-none focus:border-sky-500 font-bold"
+                        placeholder="예: 25"
+                        type="number"
+                        value={ageInput}
+                        onChange={(e) => {
+                          setAgeInput(e.target.value);
+                          setCurrentPage(1);
+                        }}
+                      />
+                      <span className="text-slate-600">세 기준 필터링</span>
+                      {ageInput && (
+                        <button
+                          type="button"
+                          onClick={() => setAgeInput('')}
+                          className="text-xs text-sky-600 hover:underline ml-2"
+                        >
+                          연령제한 해제
+                        </button>
+                      )}
                     </div>
                   </div>
 
-                  {/* 3. Age & Income */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-1.5 border-b border-dashed border-sky-100 items-center">
-                    <div className="flex items-center gap-3">
-                      <label className="w-24 font-bold text-slate-900 text-sm flex-shrink-0">연령</label>
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className="text-slate-600">만</span>
-                        <input className="w-24 bg-slate-50/60 border border-slate-200 rounded-xl px-2.5 py-1 text-center text-xs focus:outline-none focus:border-sky-500" placeholder="29" type="number" />
-                        <span className="text-slate-600">세</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="w-24 flex-shrink-0">
-                        <span className="block font-bold text-slate-900 text-sm leading-tight">연소득</span>
-                        <span className="block font-medium text-slate-400 text-xs leading-tight">(만원)</span>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <input className="w-20 bg-slate-50/60 border border-slate-200 rounded-xl px-2 py-1 text-center text-xs focus:outline-none focus:border-sky-500" placeholder="0" type="number" />
-                        <span className="text-slate-500">만원 이상 ~</span>
-                        <input className="w-20 bg-slate-50/60 border border-slate-200 rounded-xl px-2 py-1 text-center text-xs focus:outline-none focus:border-sky-500" placeholder="3,600" type="number" />
-                        <span className="text-slate-500">만원 이하</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 4. Education */}
-                  <div className="flex flex-col md:flex-row items-start md:items-center gap-3 pb-1.5 border-b border-dashed border-sky-100">
-                    <label className="w-24 font-bold text-slate-900 text-sm flex-shrink-0 pt-1 md:pt-0">학력</label>
-                    <div className="flex flex-wrap gap-2 flex-1">
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">제한없음</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">고졸 미만</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">고교 재학</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">고교 졸업</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">대학 재학</button>
-                      <button className="border border-sky-600 bg-sky-50 text-sky-700 font-semibold rounded-full px-3.5 py-1 text-xs transition-colors cursor-pointer" type="button">대학 졸업</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">석·박사</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">기타</button>
-                    </div>
-                  </div>
-
-                  {/* 5. Employment Status */}
-                  <div className="flex flex-col md:flex-row items-start md:items-center gap-3 pb-1.5 border-b border-dashed border-sky-100">
-                    <label className="w-24 font-bold text-slate-900 text-sm flex-shrink-0 pt-1 md:pt-0">취업상태</label>
-                    <div className="flex flex-wrap gap-2 flex-1">
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">제한없음</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">재직자</button>
-                      <button className="border border-sky-600 bg-sky-50 text-sky-700 font-semibold rounded-full px-3.5 py-1 text-xs transition-colors cursor-pointer" type="button">미취업자</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">프리랜서</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">(예비)창업자</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">단기근로자</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">기타</button>
-                    </div>
-                  </div>
-
-                  {/* 6. Special Criteria */}
+                  {/* 3. Employment Status */}
                   <div className="flex flex-col md:flex-row items-start md:items-center gap-3">
-                    <label className="w-24 font-bold text-slate-900 text-sm flex-shrink-0 pt-1 md:pt-0">특화분야</label>
+                    <label className="w-24 font-bold text-slate-900 text-sm flex-shrink-0">취업상태</label>
                     <div className="flex flex-wrap gap-2 flex-1">
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">제한없음</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">중소기업</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">청년 1인가구</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">기초생활수급자</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">자립준비청년</button>
-                      <button className="border border-slate-200 rounded-full px-3.5 py-1 text-xs text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600 transition-colors cursor-pointer" type="button">기타</button>
+                      {['제한없음', '재직자', '미취업자', '프리랜서', '(예비)창업자', '대학생/졸업예정자'].map((status) => {
+                        const isSelected = selectedEmployment === status;
+                        return (
+                          <button
+                            key={status}
+                            type="button"
+                            onClick={() => {
+                              setSelectedEmployment(status);
+                              setCurrentPage(1);
+                            }}
+                            className={`rounded-full px-3.5 py-1 text-xs transition-colors cursor-pointer border ${isSelected
+                              ? 'border-sky-600 bg-sky-50 text-sky-700 font-semibold'
+                              : 'border-slate-200 text-slate-600 bg-white hover:border-sky-400 hover:text-sky-600'
+                              }`}
+                          >
+                            {status}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
 
                 {/* Filter Actions */}
-                <div className="bg-sky-50/50 px-6 py-2 border-t border-sky-100 flex items-center justify-center gap-3">
-                  <button className="bg-sky-600 hover:bg-sky-700 text-white px-7 py-2 rounded-full font-semibold text-xs flex items-center gap-1.5 shadow-sm transition-all cursor-pointer" type="button">
-                    <span>내 정보 자동입력</span>
-                    <span className="material-symbols-outlined text-[18px]">person</span>
-                  </button>
-                  <button className="bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 px-6 py-2 rounded-full font-medium text-xs flex items-center gap-1 shadow-sm transition-all cursor-pointer" type="button">
-                    <span className="material-symbols-outlined text-[18px] text-slate-400">refresh</span>
-                    <span>초기화</span>
+                <div className="bg-sky-50/50 px-6 py-2.5 border-t border-sky-100 flex items-center justify-center gap-3">
+                  <button
+                    onClick={handleResetFilters}
+                    className="bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 px-6 py-1.5 rounded-full font-medium text-xs flex items-center gap-1 shadow-sm transition-all cursor-pointer"
+                    type="button"
+                  >
+                    <span>필터 전체 초기화</span>
                   </button>
                 </div>
               </div>
@@ -261,414 +444,235 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
           {/* Policy Cards Grid Section */}
           <section className="space-y-space-md pb-space-xl">
             {/* Controls & Sorting Bar */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm pb-space-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
               <div className="flex items-baseline gap-2">
-                <span className="font-headline-sm text-headline-sm text-on-surface">검색 결과 정책</span>
-                <span className="font-headline-md text-headline-md text-primary font-extrabold">42</span>
-                <span className="font-body-md text-body-md text-on-surface-variant">건</span>
+                <span className="text-sm font-semibold text-slate-700">검색 결과 정책</span>
+                <span className="text-xl font-extrabold text-sky-600">{filteredPolicies.length}</span>
+                <span className="text-xs text-slate-500">건</span>
               </div>
-              <div className="flex items-center gap-space-xs">
-                {/* Sort Options */}
-                <div className="bg-surface-container-lowest rounded-xl p-1 flex items-center shadow-xs">
-                  <button className="px-space-md py-1.5 rounded-lg bg-surface-container-high text-primary font-label-md text-label-md font-bold" type="button">내 매칭률순 ▼</button>
-                  <button className="px-space-md py-1.5 rounded-lg hover:bg-surface-container text-on-surface-variant font-label-md text-label-md transition-colors" type="button">마감임박순</button>
-                  <button className="px-space-md py-1.5 rounded-lg hover:bg-surface-container text-on-surface-variant font-label-md text-label-md transition-colors" type="button">최신등록순</button>
-                  <button className="px-space-md py-1.5 rounded-lg hover:bg-surface-container text-on-surface-variant font-label-md text-label-md transition-colors" type="button">인기조회순</button>
-                </div>
+
+              {/* Sort Options */}
+              <div className="bg-white rounded-xl p-1 flex items-center shadow-xs border border-slate-200 text-xs">
+                <button
+                  onClick={() => setSortBy('matchScore')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition-all ${sortBy === 'matchScore' ? 'bg-sky-50 text-sky-700 font-bold' : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  type="button"
+                >
+                  적합도순
+                </button>
+                <button
+                  onClick={() => setSortBy('deadline')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition-all ${sortBy === 'deadline' ? 'bg-sky-50 text-sky-700 font-bold' : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  type="button"
+                >
+                  마감임박순
+                </button>
+                <button
+                  onClick={() => setSortBy('popular')}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition-all ${sortBy === 'popular' ? 'bg-sky-50 text-sky-700 font-bold' : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  type="button"
+                >
+                  조회순
+                </button>
               </div>
             </div>
 
-            {/* Policy Cards Grid (Bento-style Rows) */}
-            <div className="flex flex-col gap-space-sm">
-              {/* Policy Row 1 */}
-              <article className="bg-surface-container-lowest rounded-2xl p-space-md shadow-sm hover:shadow-md hover:border-primary/40 border border-transparent transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-space-md group">
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
-                    <span className="px-2 py-0.5 rounded-full bg-surface-container text-primary text-[12px] font-bold">주거 🏠</span>
-                    <span className="px-2 py-0.5 rounded-full bg-error text-[12px] font-bold animate-pulse">D-3 마감</span>
-                    <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-container-low text-primary text-[12px] font-bold">
-                      <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
-                      <span>적합도 98%</span>
+            {/* Loading State */}
+            {loading ? (
+              <div className="flex flex-col gap-4">
+                {[1, 2, 3, 4].map((n) => (
+                  <div key={n} className="bg-white rounded-2xl p-5 border border-slate-200 animate-pulse space-y-3">
+                    <div className="flex gap-2">
+                      <div className="w-16 h-5 bg-slate-200 rounded"></div>
+                      <div className="w-24 h-5 bg-slate-200 rounded"></div>
                     </div>
+                    <div className="w-2/3 h-6 bg-slate-200 rounded"></div>
+                    <div className="w-full h-10 bg-slate-100 rounded"></div>
                   </div>
-                  <h3 onClick={() => onNavigate?.('detail')} data-path="detail" className="text-[20px] font-bold text-on-surface group-hover:text-primary transition-colors tracking-tight cursor-pointer mb-1">
-                    2025 서울 청년월세 특별지원 2차
-                  </h3>
-                  <div className="mb-2">
-                    <span className="inline-flex items-center text-primary font-bold text-[14px]">
-                      <span className="text-outline mr-1.5 font-normal text-[14px]">핵심 혜택</span>
-                      월 20만원 지원 <span className="text-on-surface-variant font-normal text-[14px] ml-1">(최대 12개월 240만원)</span>
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-on-surface-variant">
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">location_on</span>
-                      <span>서울시 거주 (보증금 5천만 이하)</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">badge</span>
-                      <span>만 19세 ~ 39세 무주택 청년</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">account_balance_wallet</span>
-                      <span>기준중위소득 150% 이하</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between lg:justify-end gap-space-md pt-space-xs lg:pt-0 border-t lg:border-t-0 border-surface-container-high/40 flex-shrink-0">
-                  <div className="flex flex-col text-left lg:text-right">
-                    <span className="font-label-sm text-outline">주관 기관</span>
-                    <span className="font-label-md text-on-surface font-semibold">서울시 주택정책실</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button aria-label="스크랩 저장" className="bookmark-btn w-9 h-9 rounded-xl hover:bg-surface-container flex items-center justify-center text-outline hover:text-primary transition-colors cursor-pointer" type="button">
-                      <span className="material-symbols-outlined text-[22px]" style={{ fontVariationSettings: "'FILL' 1", color: '#0ea5e9' }}>star</span>
-                    </button>
-                    <a onClick={(e) => { e.preventDefault(); onNavigate?.('detail'); }} data-path="detail" className="px-space-md py-2 rounded-xl bg-surface-container hover:bg-primary hover:text-on-primary text-primary font-label-md text-label-md transition-all flex items-center gap-1 font-bold whitespace-nowrap cursor-pointer" href="#">
-                      <span>상세보기</span>
-                      <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-                    </a>
-                  </div>
-                </div>
-              </article>
+                ))}
+              </div>
+            ) : filteredPolicies.length === 0 ? (
+              <div className="bg-white rounded-2xl p-16 text-center border border-slate-200 text-slate-500 space-y-3">
+                <p className="text-3xl">🔍</p>
+                <p className="text-base font-bold text-slate-800">일치하는 정책이 없습니다</p>
+                <p className="text-xs text-slate-500">검색어나 선택된 상세 필터 조건을 변경해 보세요.</p>
+                <button
+                  onClick={handleResetFilters}
+                  className="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs shadow-sm transition-all"
+                >
+                  필터 전체 초기화
+                </button>
+              </div>
+            ) : (
+              /* Policy Cards Rows */
+              <div className="flex flex-col gap-4">
+                {paginatedPolicies.map((policy) => {
+                  const isBookmarked = bookmarkedIds.has(policy.id);
+                  const badgeColor =
+                    policy.category === '주거'
+                      ? 'bg-rose-50 text-rose-600 border-rose-200'
+                      : policy.category === '일자리'
+                        ? 'bg-amber-50 text-amber-700 border-amber-200'
+                        : policy.category === '교육·직업훈련'
+                          ? 'bg-blue-50 text-blue-700 border-blue-200'
+                          : policy.category === '금융·복지·문화'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : 'bg-purple-50 text-purple-700 border-purple-200';
 
-              {/* Policy Row 2 */}
-              <article className="bg-surface-container-lowest rounded-2xl p-space-md shadow-sm hover:shadow-md hover:border-primary/40 border border-transparent transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-space-md group">
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
-                    <span className="px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container text-[12px] font-bold">일자리 💼</span>
-                    <span className="px-2 py-0.5 rounded-full bg-primary text-white text-[12px] font-bold">접수중 D-12</span>
-                    <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-container-low text-primary text-[12px] font-bold">
-                      <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
-                      <span>적합도 95%</span>
-                    </div>
-                  </div>
-                  <h3 onClick={() => onNavigate?.('detail')} data-path="detail" className="text-[20px] font-bold text-on-surface group-hover:text-primary transition-colors tracking-tight cursor-pointer mb-1">
-                    2025 국민취업지원제도 1유형
-                  </h3>
-                  <div className="mb-2">
-                    <span className="inline-flex items-center text-primary font-bold text-[14px]">
-                      <span className="text-outline mr-1.5 font-normal text-[14px]">핵심 혜택</span>
-                      구직수당 월 50만×6개월 <span className="text-on-surface-variant font-normal text-[14px] ml-1">(취업성공수당 최대 150만원)</span>
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-on-surface-variant">
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">location_on</span>
-                      <span>전국 거주 청년 대상</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">badge</span>
-                      <span>만 15세 ~ 34세 구직의사 청년</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">work_outline</span>
-                      <span>미취업 청년 및 졸업예정자</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between lg:justify-end gap-space-md pt-space-xs lg:pt-0 border-t lg:border-t-0 border-surface-container-high/40 flex-shrink-0">
-                  <div className="flex flex-col text-left lg:text-right">
-                    <span className="font-label-sm text-outline">주관 기관</span>
-                    <span className="font-label-md text-on-surface font-semibold">고용노동부 고용복지플러스</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button aria-label="스크랩 저장" className="bookmark-btn w-9 h-9 rounded-xl hover:bg-surface-container flex items-center justify-center text-outline hover:text-primary transition-colors cursor-pointer" type="button">
-                      <span className="material-symbols-outlined text-[22px]" style={{ fontVariationSettings: "'FILL' 1", color: '#0ea5e9' }}>star</span>
-                    </button>
-                    <a onClick={(e) => { e.preventDefault(); onNavigate?.('detail'); }} data-path="detail" className="px-space-md py-2 rounded-xl bg-surface-container hover:bg-primary hover:text-on-primary text-primary font-label-md text-label-md transition-all flex items-center gap-1 font-bold whitespace-nowrap cursor-pointer" href="#">
-                      <span>상세보기</span>
-                      <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-                    </a>
-                  </div>
-                </div>
-              </article>
+                  return (
+                    <article
+                      key={policy.id}
+                      className="bg-white rounded-2xl p-5 shadow-xs hover:shadow-md hover:border-sky-300 border border-slate-200/80 transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-4 group"
+                    >
+                      <div className="flex-1 min-w-0">
+                        {/* Badges */}
+                        <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                          <span className={`px-2.5 py-0.5 rounded-full text-[12px] font-bold border ${badgeColor}`}>
+                            {policy.category}
+                          </span>
+                          <span className={`px-2.5 py-0.5 rounded-full text-[12px] font-bold ${policy.dDay
+                            ? 'bg-rose-500 text-white animate-pulse'
+                            : 'bg-slate-100 text-slate-700'
+                            }`}>
+                            {policy.dDay || policy.status || '상시모집'}
+                          </span>
+                          <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-700 text-[12px] font-extrabold border border-sky-200">
+                            <span>🎯</span>
+                            <span>적합도 {policy.matchScore || 85}%</span>
+                          </div>
+                          {(policy as any).aiMatchReason && (
+                            <span className="text-[11px] text-teal-700 bg-teal-50 px-2.5 py-0.5 rounded-full border border-teal-200/70 font-semibold">
+                              {(policy as any).aiMatchReason}
+                            </span>
+                          )}
+                        </div>
 
-              {/* Policy Row 3 */}
-              <article className="bg-surface-container-lowest rounded-2xl p-space-md shadow-sm hover:shadow-md hover:border-primary/40 border border-transparent transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-space-md group">
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
-                    <span className="px-2 py-0.5 rounded-full bg-tertiary-container/30 text-tertiary text-[12px] font-bold">금융·복지·문화 💰</span>
-                    <span className="px-2 py-0.5 rounded-full bg-[#00875a] text-white text-[12px] font-bold">상시모집</span>
-                    <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-container-low text-primary text-[12px] font-bold">
-                      <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
-                      <span>적합도 92%</span>
-                    </div>
-                  </div>
-                  <h3 onClick={() => onNavigate?.('detail')} data-path="detail" className="text-[20px] font-bold text-on-surface group-hover:text-primary transition-colors tracking-tight cursor-pointer mb-1">
-                    청년 주택드림 청약통장
-                  </h3>
-                  <div className="mb-2">
-                    <span className="inline-flex items-center text-primary font-bold text-[14px]">
-                      <span className="text-outline mr-1.5 font-normal text-[14px]">핵심 혜택</span>
-                      최고 연 4.5% 우대이율 <span className="text-on-surface-variant font-normal text-[14px] ml-1">(당첨 시 2%대 주담대 연계)</span>
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-on-surface-variant">
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">location_on</span>
-                      <span>전국 9개 수탁은행 영업점/앱</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">badge</span>
-                      <span>만 19세 ~ 만 34세 무주택 청년</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">savings</span>
-                      <span>직전 연소득 5,000만원 이하</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between lg:justify-end gap-space-md pt-space-xs lg:pt-0 border-t lg:border-t-0 border-surface-container-high/40 flex-shrink-0">
-                  <div className="flex flex-col text-left lg:text-right">
-                    <span className="font-label-sm text-outline">주관 기관</span>
-                    <span className="font-label-md text-on-surface font-semibold">국토교통부 주택기금</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button aria-label="스크랩 저장" className="bookmark-btn w-9 h-9 rounded-xl hover:bg-surface-container flex items-center justify-center text-outline hover:text-primary transition-colors cursor-pointer" type="button">
-                      <span className="material-symbols-outlined text-[22px]">star</span>
-                    </button>
-                    <a onClick={(e) => { e.preventDefault(); onNavigate?.('detail'); }} data-path="detail" className="px-space-md py-2 rounded-xl bg-surface-container hover:bg-primary hover:text-on-primary text-primary font-label-md text-label-md transition-all flex items-center gap-1 font-bold whitespace-nowrap cursor-pointer" href="#">
-                      <span>상세보기</span>
-                      <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-                    </a>
-                  </div>
-                </div>
-              </article>
+                        {/* Title */}
+                        <h3
+                          onClick={() => onNavigate?.('detail', policy.id)}
+                          className="text-lg md:text-[19px] font-bold text-slate-900 group-hover:text-sky-600 transition-colors tracking-tight cursor-pointer mb-1.5"
+                        >
+                          {policy.title}
+                        </h3>
 
-              {/* Policy Row 4 */}
-              <article className="bg-surface-container-lowest rounded-2xl p-space-md shadow-sm hover:shadow-md hover:border-primary/40 border border-transparent transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-space-md group">
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
-                    <span className="px-2 py-0.5 rounded-full bg-surface-container text-on-primary-container text-[12px] font-bold">교육·직업훈련 🎓</span>
-                    <span className="px-2 py-0.5 rounded-full bg-primary text-white text-[12px] font-bold">D-18</span>
-                    <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-container-low text-primary text-[12px] font-bold">
-                      <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
-                      <span>적합도 90%</span>
-                    </div>
-                  </div>
-                  <h3 onClick={() => onNavigate?.('detail')} data-path="detail" className="text-[20px] font-bold text-on-surface group-hover:text-primary transition-colors tracking-tight cursor-pointer mb-1">
-                    K-디지털 트레이닝 실무형 생성형 AI 청년 개발자 양성과정
-                  </h3>
-                  <div className="mb-2">
-                    <span className="inline-flex items-center text-primary font-bold text-[14px]">
-                      <span className="text-outline mr-1.5 font-normal text-[14px]">핵심 혜택</span>
-                      교육비 100% 국비 지원 <span className="text-on-surface-variant font-normal text-[14px] ml-1">(훈련장려금 월 31.6만원)</span>
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-on-surface-variant">
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">location_on</span>
-                      <span>서울 성수 캠퍼스 및 온라인 병행</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">badge</span>
-                      <span>만 19세 ~ 34세 구직자 및 졸업예정자</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">school</span>
-                      <span>내일배움카드 발급가능자 (전공 무관)</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between lg:justify-end gap-space-md pt-space-xs lg:pt-0 border-t lg:border-t-0 border-surface-container-high/40 flex-shrink-0">
-                  <div className="flex flex-col text-left lg:text-right">
-                    <span className="font-label-sm text-outline">주관 기관</span>
-                    <span className="font-label-md text-on-surface font-semibold">고용노동부 직업능력심사평가원</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button aria-label="스크랩 저장" className="bookmark-btn w-9 h-9 rounded-xl hover:bg-surface-container flex items-center justify-center text-outline hover:text-primary transition-colors cursor-pointer" type="button">
-                      <span className="material-symbols-outlined text-[22px]">star</span>
-                    </button>
-                    <a onClick={(e) => { e.preventDefault(); onNavigate?.('detail'); }} data-path="detail" className="px-space-md py-2 rounded-xl bg-surface-container hover:bg-primary hover:text-on-primary text-primary font-label-md text-label-md transition-all flex items-center gap-1 font-bold whitespace-nowrap cursor-pointer" href="#">
-                      <span>상세보기</span>
-                      <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-                    </a>
-                  </div>
-                </div>
-              </article>
+                        {/* Summary / Benefit */}
+                        <div className="mb-3">
+                          <p className="text-sm text-slate-600 leading-relaxed line-clamp-2">
+                            <span className="font-bold text-sky-700 mr-2">[혜택 및 요약]</span>
+                            {policy.benefitSummary || '지원 세부 사항을 확인해 보세요.'}
+                          </p>
+                        </div>
 
-              {/* Policy Row 5 */}
-              <article className="bg-surface-container-lowest rounded-2xl p-space-md shadow-sm hover:shadow-md hover:border-primary/40 border border-transparent transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-space-md group">
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
-                    <span className="px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container text-[12px] font-bold">일자리 💼</span>
-                    <span className="px-2 py-0.5 rounded-full bg-error text-[12px] font-bold">D-5</span>
-                    <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-container-low text-primary text-[12px] font-bold">
-                      <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
-                      <span>적합도 88%</span>
-                    </div>
-                  </div>
-                  <h3 onClick={() => onNavigate?.('detail')} data-path="detail" className="text-[20px] font-bold text-on-surface group-hover:text-primary transition-colors tracking-tight cursor-pointer mb-1">
-                    청년 자격증 응시료 실비 지원사업
-                  </h3>
-                  <div className="mb-2">
-                    <span className="inline-flex items-center text-primary font-bold text-[14px]">
-                      <span className="text-outline mr-1.5 font-normal text-[14px]">핵심 혜택</span>
-                      연 최대 10만원 실비 지원 <span className="text-on-surface-variant font-normal text-[14px] ml-1">(어학/한국사/국가공인)</span>
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-on-surface-variant">
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">location_on</span>
-                      <span>서울시 25개 자치구 거주</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">badge</span>
-                      <span>만 19세 ~ 34세 미취업 청년</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">verified</span>
-                      <span>신청일 기준 취업 전 시험 응시자</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between lg:justify-end gap-space-md pt-space-xs lg:pt-0 border-t lg:border-t-0 border-surface-container-high/40 flex-shrink-0">
-                  <div className="flex flex-col text-left lg:text-right">
-                    <span className="font-label-sm text-outline">주관 기관</span>
-                    <span className="font-label-md text-on-surface font-semibold">청년몽땅정보통 지원단</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button aria-label="스크랩 저장" className="bookmark-btn w-9 h-9 rounded-xl hover:bg-surface-container flex items-center justify-center text-outline hover:text-primary transition-colors cursor-pointer" type="button">
-                      <span className="material-symbols-outlined text-[22px]">star</span>
-                    </button>
-                    <a onClick={(e) => { e.preventDefault(); onNavigate?.('detail'); }} data-path="detail" className="px-space-md py-2 rounded-xl bg-surface-container hover:bg-primary hover:text-on-primary text-primary font-label-md text-label-md transition-all flex items-center gap-1 font-bold whitespace-nowrap cursor-pointer" href="#">
-                      <span>상세보기</span>
-                      <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-                    </a>
-                  </div>
-                </div>
-              </article>
+                        {/* Meta Tags */}
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-slate-500">
+                          <div className="flex items-center gap-1">
+                            <span>🏛️</span>
+                            <span>{policy.organization}</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span>👤</span>
+                            <span>{policy.targetAge || '연령 무관'}</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span>📋</span>
+                            <span className="truncate max-w-[200px]">{policy.incomeCondition || '제한 없음'}</span>
+                          </div>
+                        </div>
+                      </div>
 
-              {/* Policy Row 6 */}
-              <article className="bg-surface-container-lowest rounded-2xl p-space-md shadow-sm hover:shadow-md hover:border-primary/40 border border-transparent transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-space-md group">
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
-                    <span className="px-2 py-0.5 rounded-full bg-surface-container-high text-on-surface text-[12px] font-bold">참여·기반 🤝</span>
-                    <span className="px-2 py-0.5 rounded-full bg-primary text-white text-[12px] font-bold">D-25</span>
-                    <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-container-low text-primary text-[12px] font-bold">
-                      <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
-                      <span>적합도 85%</span>
-                    </div>
-                  </div>
-                  <h3 onClick={() => onNavigate?.('detail')} data-path="detail" className="text-[20px] font-bold text-on-surface group-hover:text-primary transition-colors tracking-tight cursor-pointer mb-1">
-                    2025 청년도전지원사업 (중장기 이수 프로그램)
-                  </h3>
-                  <div className="mb-2">
-                    <span className="inline-flex items-center text-primary font-bold text-[14px]">
-                      <span className="text-outline mr-1.5 font-normal text-[14px]">핵심 혜택</span>
-                      최대 300만원 지급 <span className="text-on-surface-variant font-normal text-[14px] ml-1">(참여수당+이수인센티브)</span>
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-on-surface-variant">
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">location_on</span>
-                      <span>전국 운영기관 (청년재단 및 지자체)</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">badge</span>
-                      <span>만 18세 ~ 34세 구직단념청년</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">psychology</span>
-                      <span>자립준비청년, 청소년쉼터 입퇴소 청년 우대</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between lg:justify-end gap-space-md pt-space-xs lg:pt-0 border-t lg:border-t-0 border-surface-container-high/40 flex-shrink-0">
-                  <div className="flex flex-col text-left lg:text-right">
-                    <span className="font-label-sm text-outline">주관 기관</span>
-                    <span className="font-label-md text-on-surface font-semibold">고용노동부 청년정책관</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button aria-label="스크랩 저장" className="bookmark-btn w-9 h-9 rounded-xl hover:bg-surface-container flex items-center justify-center text-outline hover:text-primary transition-colors cursor-pointer" type="button">
-                      <span className="material-symbols-outlined text-[22px]">star</span>
-                    </button>
-                    <a onClick={(e) => { e.preventDefault(); onNavigate?.('detail'); }} data-path="detail" className="px-space-md py-2 rounded-xl bg-surface-container hover:bg-primary hover:text-on-primary text-primary font-label-md text-label-md transition-all flex items-center gap-1 font-bold whitespace-nowrap cursor-pointer" href="#">
-                      <span>상세보기</span>
-                      <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-                    </a>
-                  </div>
-                </div>
-              </article>
+                      {/* Right Action Box */}
+                      <div className="flex items-center justify-between lg:justify-end gap-3 pt-3 lg:pt-0 border-t lg:border-t-0 border-slate-100 flex-shrink-0">
+                        <button
+                          aria-label="북마크 저장"
+                          onClick={(e) => handleBookmarkToggle(policy.id, e)}
+                          className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors cursor-pointer border ${isBookmarked
+                            ? 'bg-amber-50 text-amber-500 border-amber-200'
+                            : 'bg-slate-50 text-slate-400 hover:text-amber-500 border-slate-200'
+                            }`}
+                          type="button"
+                        >
+                          <span className="text-lg">{isBookmarked ? '★' : '☆'}</span>
+                        </button>
 
-              {/* Policy Row 7 */}
-              <article className="bg-surface-container-lowest rounded-2xl p-space-md shadow-sm hover:shadow-md hover:border-primary/40 border border-transparent transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-space-md group">
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
-                    <span className="px-2 py-0.5 rounded-full bg-tertiary-container/30 text-tertiary text-[12px] font-bold">금융·복지·문화 💰</span>
-                    <span className="px-2 py-0.5 rounded-full bg-[#00875a] text-white text-[12px] font-bold">상시모집</span>
-                    <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-container-low text-primary text-[12px] font-bold">
-                      <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
-                      <span>적합도 82%</span>
-                    </div>
-                  </div>
-                  <h3 onClick={() => onNavigate?.('detail')} data-path="detail" className="text-[20px] font-bold text-on-surface group-hover:text-primary transition-colors tracking-tight cursor-pointer mb-1">
-                    청년 마음건강 지원사업 (심리상담 바우처)
-                  </h3>
-                  <div className="mb-2">
-                    <span className="inline-flex items-center text-primary font-bold text-[14px]">
-                      <span className="text-outline mr-1.5 font-normal text-[14px]">핵심 혜택</span>
-                      전문 심리상담료 90% 지원 <span className="text-on-surface-variant font-normal text-[14px] ml-1">(3개월간 회당 6~7만원 지원)</span>
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-on-surface-variant">
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">location_on</span>
-                      <span>전국 주민센터 방문 또는 복지로 온라인</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">badge</span>
-                      <span>만 19세 ~ 34세 청년 (소득기준 없음)</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[16px] text-outline">favorite</span>
-                      <span>심리·정서적 지원이 필요한 청년</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between lg:justify-end gap-space-md pt-space-xs lg:pt-0 border-t lg:border-t-0 border-surface-container-high/40 flex-shrink-0">
-                  <div className="flex flex-col text-left lg:text-right">
-                    <span className="font-label-sm text-outline">주관 기관</span>
-                    <span className="font-label-md text-on-surface font-semibold">보건복지부 인구정책총괄과</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button aria-label="스크랩 저장" className="bookmark-btn w-9 h-9 rounded-xl hover:bg-surface-container flex items-center justify-center text-outline hover:text-primary transition-colors cursor-pointer" type="button">
-                      <span className="material-symbols-outlined text-[22px]">star</span>
-                    </button>
-                    <a onClick={(e) => { e.preventDefault(); onNavigate?.('detail'); }} data-path="detail" className="px-space-md py-2 rounded-xl bg-surface-container hover:bg-primary hover:text-on-primary text-primary font-label-md text-label-md transition-all flex items-center gap-1 font-bold whitespace-nowrap cursor-pointer" href="#">
-                      <span>상세보기</span>
-                      <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-                    </a>
-                  </div>
-                </div>
-              </article>
-            </div>
+                        <button
+                          onClick={() => onNavigate?.('detail', policy.id)}
+                          className="px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs shadow-sm transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                        >
+                          <span>상세보기</span>
+                          <span>→</span>
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Pagination Component */}
-            <nav aria-label="페이지 네비게이션" className="pt-space-xl flex items-center justify-center gap-space-xs">
-              <button className="w-10 h-10 rounded-xl bg-surface-container-lowest text-outline hover:text-primary flex items-center justify-center shadow-xs transition-colors" disabled={true} type="button">
-                <span className="material-symbols-outlined text-[20px]">chevron_left</span>
-              </button>
-              <button className="w-10 h-10 rounded-xl bg-primary text-on-primary font-label-md text-label-md font-bold shadow-sm" type="button">1</button>
-              <button className="w-10 h-10 rounded-xl bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container font-label-md text-label-md transition-colors shadow-xs" type="button">2</button>
-              <button className="w-10 h-10 rounded-xl bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container font-label-md text-label-md transition-colors shadow-xs" type="button">3</button>
-              <button className="w-10 h-10 rounded-xl bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container font-label-md text-label-md transition-colors shadow-xs" type="button">4</button>
-              <button className="w-10 h-10 rounded-xl bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container font-label-md text-label-md transition-colors shadow-xs" type="button">5</button>
-              <button className="w-10 h-10 rounded-xl bg-surface-container-lowest text-outline hover:text-primary flex items-center justify-center shadow-xs transition-colors" type="button">
-                <span className="material-symbols-outlined text-[20px]">chevron_right</span>
-              </button>
-            </nav>
+            {totalPages > 1 && (
+              <nav aria-label="페이지 네비게이션" className="pt-6 flex items-center justify-center gap-1.5">
+                <button
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="w-9 h-9 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center shadow-xs transition-colors cursor-pointer"
+                  type="button"
+                >
+                  ◀
+                </button>
+
+                {Array.from({ length: totalPages }, (_, i) => i + 1)
+                  .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 2)
+                  .map((page, idx, arr) => (
+                    <React.Fragment key={page}>
+                      {idx > 0 && arr[idx - 1] !== page - 1 && (
+                        <span className="px-1 text-slate-400">...</span>
+                      )}
+                      <button
+                        onClick={() => setCurrentPage(page)}
+                        className={`w-9 h-9 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer ${currentPage === page
+                          ? 'bg-sky-600 text-white shadow-sky-300'
+                          : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+                          }`}
+                        type="button"
+                      >
+                        {page}
+                      </button>
+                    </React.Fragment>
+                  ))}
+
+                <button
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="w-9 h-9 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center shadow-xs transition-colors cursor-pointer"
+                  type="button"
+                >
+                  ▶
+                </button>
+              </nav>
+            )}
           </section>
 
           {/* Interactive Guide Banner */}
-          <section className="mb-space-xl bg-gradient-to-r from-primary to-primary-container text-on-primary rounded-3xl p-space-lg flex flex-col md:flex-row items-center justify-between gap-space-lg shadow-md relative overflow-hidden">
-            <div className="space-y-1 relative z-10">
-              <span className="inline-block px-2.5 py-0.5 rounded-full bg-on-primary/20 text-on-primary font-label-sm text-label-sm font-semibold">청년나침반 AI 알림 서비스</span>
-              <h4 className="font-headline-md text-headline-md tracking-tight">새로 신설되는 청년지원사업을 카카오톡으로 가장 먼저 받아보세요!</h4>
-              <p className="font-body-sm text-body-sm text-on-primary/90">내 거주지와 자격 조건이 변경될 때마다 적합도 90% 이상인 정책만 선별 발송해 드립니다.</p>
+          <section className="mb-space-xl bg-gradient-to-r from-sky-600 to-indigo-600 text-white rounded-3xl p-6 md:p-8 flex flex-col md:flex-row items-center justify-between gap-6 shadow-md relative overflow-hidden">
+            <div className="space-y-1.5 relative z-10">
+              <span className="inline-block px-2.5 py-0.5 rounded-full bg-white/20 text-white text-xs font-semibold">
+                청년나침반 AI 알림 서비스
+              </span>
+              <h4 className="text-xl md:text-2xl font-bold tracking-tight">
+                나에게 맞는 청년지원사업을 텔레그램 / 이메일로 받아보세요!
+              </h4>
+              <p className="text-xs md:text-sm text-sky-100 leading-relaxed">
+                자신이 선택한 정책만 쏙쏙! 뽑아 푸시 알림해 드립니다.
+              </p>
             </div>
-            <button onClick={() => onNavigate?.('profile')} data-path="profile" className="relative z-10 px-space-lg py-3 rounded-xl bg-surface-container-lowest text-primary hover:bg-surface-container font-label-lg text-label-lg font-bold shadow-md transition-all whitespace-nowrap cursor-pointer" type="button">
+            <button
+              onClick={() => onNavigate?.('profile')}
+              className="relative z-10 px-6 py-3 rounded-xl bg-white text-sky-700 hover:bg-sky-50 font-bold text-xs shadow-md transition-all whitespace-nowrap cursor-pointer"
+              type="button"
+            >
               맞춤 정책 알림 신청하기 🔔
             </button>
           </section>

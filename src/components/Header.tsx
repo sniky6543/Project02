@@ -77,8 +77,8 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onNavigate }) => {
               AI요약 뉴스
             </button>
             <button
-              onClick={() => onNavigate('kanban')}
-              className={`transition-all py-1.5 px-3.5 rounded-full text-sm font-semibold ${
+              onClick={() => onNavigate('calendar')}
+              className={`transition-all py-1.5 px-3.5 rounded-full text-sm font-semibold cursor-pointer ${
                 isCalendar
                   ? 'text-sky-600 bg-sky-50 shadow-xs'
                   : 'text-slate-600 hover:text-sky-600 hover:bg-slate-50'

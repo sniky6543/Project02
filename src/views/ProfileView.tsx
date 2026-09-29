@@ -7,14 +7,37 @@ import {
   EMPTY_PROFILE_SETTINGS,
   DEMO_PROFILE_SETTINGS,
 } from '../utils/profileStorage';
+import { getPolicies } from '../api/supabasePolicies';
+import { PolicyItem } from '../types/policy';
+import { calculatePolicyMatch } from '../utils/policyMatcher';
+import { KOREA_REGIONS, KOREA_CITIES } from '../utils/regionData';
 
 interface ProfileViewProps {
-  onNavigate?: (path: string) => void;
+  onNavigate?: (path: string, policyId?: string) => void;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
   // 1. 로컬스토리지에서 저장된 초기 설정 불러오기 (NULL-Safe)
   const [initialData] = useState<ProfileSettingsData>(() => loadProfileSettings());
+
+  // Supabase 실데이터 공고 목록
+  const [rawPolicies, setRawPolicies] = useState<PolicyItem[]>([]);
+  const [policiesLoading, setPoliciesLoading] = useState<boolean>(true);
+
+  useEffect(() => {
+    async function loadData() {
+      setPoliciesLoading(true);
+      try {
+        const data = await getPolicies({ limit: 100 });
+        setRawPolicies(data);
+      } catch (err) {
+        console.error('Failed to load policies in ProfileView:', err);
+      } finally {
+        setPoliciesLoading(false);
+      }
+    }
+    loadData();
+  }, []);
 
   // SECTION 01: 기본 인적사항
   const [nickname, setNickname] = useState<string>(initialData.nickname || '');
@@ -46,10 +69,41 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
   const [isEmailSelected, setIsEmailSelected] = useState<boolean>(Boolean(initialData.isEmailSelected));
   const [emailAddress, setEmailAddress] = useState<string>(initialData.emailAddress || '');
 
+  // 텔레그램 봇 설정 가이드 팝업 상태
+  const [showTelegramGuide, setShowTelegramGuide] = useState<boolean>(false);
+  const [copiedBotId, setCopiedBotId] = useState<boolean>(false);
+  const [testAlertSent, setTestAlertSent] = useState<boolean>(false);
+
   // UI 피드백 상태 (저장 알림 토스트 & 최종 저장 시각)
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [lastSavedTime, setLastSavedTime] = useState<string>('방금 전');
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'ready'>('saved');
+
+  // 시/도 변경 시 해당 도시의 첫 번째 시/군/구로 자동 동기화
+  const handleCityChange = (newCity: string) => {
+    setRegionCity(newCity);
+    const districts = KOREA_REGIONS[newCity] || [];
+    if (districts.length > 0) {
+      setRegionDistrict(districts[0]);
+    } else {
+      setRegionDistrict('');
+    }
+  };
+
+  // 텔레그램 봇 아이디 복사 핸들러
+  const handleCopyBotUsername = () => {
+    navigator.clipboard.writeText('@youth_compass_bot');
+    setCopiedBotId(true);
+    showToast('📋 텔레그램 봇 아이디(@youth_compass_bot)가 복사되었습니다.');
+    setTimeout(() => setCopiedBotId(false), 2500);
+  };
+
+  // 텔레그램 테스트 알림 시뮬레이션
+  const handleSendTestTelegramAlert = () => {
+    setTestAlertSent(true);
+    showToast('🔔 [테스트] 청년나침반 봇: 회원님의 맞춤 정책 알림이 정상 수신되었습니다!');
+    setTimeout(() => setTestAlertSent(false), 3000);
+  };
 
   // 만 나이 자동 계산 (NULL Safe)
   const calculatedAge = useMemo(() => {
@@ -103,13 +157,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
     );
   }, [nickname, birthDate, householdType, employmentStatus, targetJob, housingType, annualIncome, interests]);
 
-  // 실시간 적합 매칭 건수 (초기화 상태일 때는 0건)
-  const matchCount = useMemo(() => {
-    if (!hasProfileData) return 0;
-    if (interests.length > 0) return interests.length * 3 + 3;
-    return 18;
-  }, [hasProfileData, interests.length]);
-
   // 전체 프로필 상태 객체 생성
   const currentProfileData: ProfileSettingsData = useMemo(() => ({
     nickname,
@@ -140,6 +187,56 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
     employmentStatus, education, targetJob, housingType, annualIncome, interests,
     notifyNewPolicy, notifyDeadline, isTelegramSelected, telegramId, isEmailSelected, emailAddress
   ]);
+
+  // 마감 임박 정렬 헬퍼 (전체 공고 기준 D-Day 우선 정렬)
+  const deadlineSortedPolicies = useMemo(() => {
+    return [...rawPolicies].sort((a, b) => {
+      const getDays = (item: PolicyItem) => {
+        if (!item.dDay) return 9999;
+        if (item.dDay === 'D-Day') return 0;
+        const num = parseInt(item.dDay.replace(/[^0-9]/g, ''), 10);
+        return isNaN(num) ? 9998 : num;
+      };
+      const daysA = getDays(a);
+      const daysB = getDays(b);
+      if (daysA !== daysB) {
+        return daysA - daysB;
+      }
+      if (a.status === '접수중' && b.status !== '접수중') return -1;
+      if (b.status === '접수중' && a.status !== '접수중') return 1;
+      return 0;
+    });
+  }, [rawPolicies]);
+
+  // 나의 설정에 맞는 공고만 리스트에 보이게 설정 (미설정 시 전체 공고 마감 임박순)
+  const displayedPolicies = useMemo(() => {
+    if (!rawPolicies || rawPolicies.length === 0) return [];
+
+    if (hasProfileData) {
+      // 내 설정(관심분야, 거주지역, 연령, 취업상태 등)에 부합하는 공고만 엄격 선별
+      const scored = rawPolicies
+        .map((p) => {
+          const match = calculatePolicyMatch(p, currentProfileData);
+          return {
+            ...p,
+            matchScore: match.score,
+            aiMatchReason: match.matchReasons.join(' · '),
+            isMatched: match.isMatched,
+          };
+        })
+        .filter((p) => p.isMatched && (p.matchScore || 0) >= 75); // 실제 DB 조건과 일치하는 공고만 선별
+
+      return scored.sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0));
+    } else {
+      // 프로필에 내설정이 되어있지 않으면 전체 공고가 공고마감 임박순으로 설정
+      return deadlineSortedPolicies;
+    }
+  }, [rawPolicies, hasProfileData, currentProfileData, deadlineSortedPolicies]);
+
+  // 실시간 적합 매칭 건수 (DB 조건 일치 기준)
+  const matchCount = useMemo(() => {
+    return displayedPolicies.length;
+  }, [displayedPolicies]);
 
   // 변경 시 로컬스토리지 자동 임시저장 (Auto-save)
   useEffect(() => {
@@ -178,14 +275,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
   const handleExplicitSave = () => {
     const success = saveProfileSettings(currentProfileData);
     if (success) {
-      showToast('✅ 프로필 설정이 로컬스토리지에 성공적으로 저장되었습니다!');
+      showToast('✅ 프로필 설정이 완료되었습니다! 모든 화면에서 맞춤 정책이 1순위로 우선 노출됩니다.');
       setTimeout(() => {
         if (onNavigate) {
-          onNavigate('explore');
+          onNavigate('home');
         }
       }, 900);
     } else {
-      showToast('❌ 로컬스토리지 저장 중 오류가 발생했습니다.');
+      showToast('❌ 프로필 저장 중 오류가 발생했습니다.');
     }
   };
 
@@ -314,22 +411,26 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
               </div>
               <div className="pr-1" style={{ whiteSpace: 'nowrap', wordBreak: 'keep-all' }}>
                 <div className="flex items-center gap-1.5 mb-0.5">
-                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${hasProfileData && matchCount > 0 ? 'bg-emerald-500' : 'bg-slate-300'}`}></span>
-                  <span className="text-xs font-medium text-slate-500">현재 필터 상태</span>
+                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${hasProfileData && matchCount > 0 ? 'bg-emerald-500' : hasProfileData ? 'bg-amber-400' : 'bg-slate-300'}`}></span>
+                  <span className="text-xs font-medium text-slate-500">
+                    {hasProfileData ? 'DB 맞춤 필터 적용' : '현재 필터 상태'}
+                  </span>
                 </div>
-                {hasProfileData && matchCount > 0 ? (
+                {hasProfileData ? (
                   <div className="flex items-baseline gap-1">
                     <span className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight">
                       {matchCount}건
                     </span>
-                    <span className="text-sm font-bold text-sky-600">적합 매칭</span>
+                    <span className="text-xs font-bold text-sky-600">
+                      / DB {rawPolicies.length}건
+                    </span>
                   </div>
                 ) : (
                   <div className="flex items-baseline gap-1">
                     <span className="text-xl md:text-2xl font-bold text-slate-400 tracking-tight">
                       미설정
                     </span>
-                    <span className="text-xs font-medium text-slate-400">(필터 미적용)</span>
+                    <span className="text-xs font-medium text-slate-400">(전체 {rawPolicies.length}건 마감순)</span>
                   </div>
                 )}
               </div>
@@ -425,46 +526,48 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                   </div>
                 </div>
 
-                {/* 실거주지 선택 */}
+                {/* 실거주지 선택 (특별시/광역시/도 선택 시 해당 하위 시/군/구 자동 연동) */}
                 <div className="space-y-1.5 pt-1">
-                  <label className="text-xs font-bold text-slate-700">실제 주민등록 거주지</label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-700">실제 주민등록 거주지</label>
+                    <span className="text-xs text-sky-600 font-medium">지자체 청년 지원 조례 기준</span>
+                  </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* 상위: 특별시 & 광역시 & 도 선택 */}
                     <div className="relative">
                       <select
                         value={regionCity}
-                        onChange={(e) => setRegionCity(e.target.value)}
-                        className="w-full appearance-none bg-slate-50/80 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:border-sky-400 focus:bg-white cursor-pointer shadow-xs"
+                        onChange={(e) => handleCityChange(e.target.value)}
+                        className="w-full appearance-none bg-slate-50/80 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:border-sky-400 focus:bg-white cursor-pointer shadow-xs font-medium"
                       >
-                        <option value="서울특별시">서울특별시</option>
-                        <option value="경기도">경기도</option>
-                        <option value="인천광역시">인천광역시</option>
-                        <option value="부산광역시">부산광역시</option>
-                        <option value="대구광역시">대구광역시</option>
-                        <option value="대전광역시">대전광역시</option>
-                        <option value="광주광역시">광주광역시</option>
+                        {KOREA_CITIES.map((city) => (
+                          <option key={city} value={city}>
+                            {city}
+                          </option>
+                        ))}
                       </select>
                       <span className="material-symbols-outlined absolute right-3 top-2.5 text-slate-400 pointer-events-none text-[20px]">expand_more</span>
                     </div>
+
+                    {/* 하위: 선택된 시/도에 맞는 시·군·구 선택 */}
                     <div className="relative">
                       <select
                         value={regionDistrict}
                         onChange={(e) => setRegionDistrict(e.target.value)}
-                        className="w-full appearance-none bg-slate-50/80 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:border-sky-400 focus:bg-white cursor-pointer shadow-xs"
+                        className="w-full appearance-none bg-slate-50/80 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:border-sky-400 focus:bg-white cursor-pointer shadow-xs font-medium"
                       >
-                        <option value="마포구 (서교동/상수동)">마포구 (서교동/상수동)</option>
-                        <option value="관악구">관악구</option>
-                        <option value="영등포구">영등포구</option>
-                        <option value="성동구">성동구</option>
-                        <option value="강남구">강남구</option>
-                        <option value="송파구">송파구</option>
-                        <option value="서대문구">서대문구</option>
+                        {(KOREA_REGIONS[regionCity] || []).map((district) => (
+                          <option key={district} value={district}>
+                            {district}
+                          </option>
+                        ))}
                       </select>
                       <span className="material-symbols-outlined absolute right-3 top-2.5 text-slate-400 pointer-events-none text-[20px]">expand_more</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 text-sky-700 pt-1 text-xs">
                     <svg className="w-4 h-4 text-sky-500 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
-                    <span>{regionCity} {regionDistrict} 혜택 적용 대상지입니다.</span>
+                    <span><strong>{regionCity} {regionDistrict}</strong> 맞춤 청년 정책 및 전국 공통 혜택이 적용됩니다.</span>
                   </div>
                 </div>
 
@@ -938,37 +1041,65 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {/* 텔레그램 알림 채널 */}
                     <div className={`p-4 rounded-xl border transition-all ${isTelegramSelected ? 'bg-sky-50/30 border-sky-200' : 'bg-slate-50/60 border-slate-200'}`}>
-                      <label className="flex items-center gap-3 cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={isTelegramSelected}
-                          onChange={(e) => setIsTelegramSelected(e.target.checked)}
-                          className="w-4 h-4 rounded text-sky-600 focus:ring-sky-500 border-slate-300 cursor-pointer"
-                        />
-                        <div className="flex items-center gap-2">
-                          <div className={`w-6 h-6 rounded-full text-white flex items-center justify-center text-xs shadow-xs transition-colors ${isTelegramSelected ? 'bg-[#229ED9]' : 'bg-slate-400'}`}>
-                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
-                              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z" />
-                            </svg>
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="flex items-center gap-3 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={isTelegramSelected}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setIsTelegramSelected(checked);
+                              if (checked) {
+                                setShowTelegramGuide(true);
+                              }
+                            }}
+                            className="w-4 h-4 rounded text-sky-600 focus:ring-sky-500 border-slate-300 cursor-pointer"
+                          />
+                          <div className="flex items-center gap-2">
+                            <div className={`w-6 h-6 rounded-full text-white flex items-center justify-center text-xs shadow-xs transition-colors ${isTelegramSelected ? 'bg-[#229ED9]' : 'bg-slate-400'}`}>
+                              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z" />
+                              </svg>
+                            </div>
+                            <span className={`text-xs font-semibold transition-colors ${isTelegramSelected ? 'text-slate-800' : 'text-slate-500'}`}>텔레그램 알림</span>
                           </div>
-                          <span className={`text-xs font-semibold transition-colors ${isTelegramSelected ? 'text-slate-800' : 'text-slate-500'}`}>텔레그램 알림</span>
-                        </div>
-                      </label>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setShowTelegramGuide(true)}
+                          className="px-2 py-1 rounded-lg bg-sky-100 hover:bg-sky-200 text-sky-700 text-[11px] font-bold transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
+                          title="텔레그램 봇 설정 가이드 및 이미지 보기"
+                        >
+                          <span className="material-symbols-outlined text-[13px]">image</span>
+                          <span>설정 가이드</span>
+                        </button>
+                      </div>
+
                       <div className="mt-3 pt-3 border-t border-slate-200/80 space-y-1.5">
-                        <label className={`text-[11px] font-bold transition-colors ${isTelegramSelected ? 'text-slate-700' : 'text-slate-400'}`}>텔레그램 ID 입력</label>
+                        <div className="flex justify-between items-center">
+                          <label className={`text-[11px] font-bold transition-colors ${isTelegramSelected ? 'text-slate-700' : 'text-slate-400'}`}>텔레그램 ID 입력</label>
+                          <button
+                            type="button"
+                            onClick={() => setShowTelegramGuide(true)}
+                            className="text-[11px] text-sky-600 hover:text-sky-800 font-medium underline cursor-pointer flex items-center gap-0.5"
+                          >
+                            <span>봇 설정 방법 보기</span>
+                            <span className="material-symbols-outlined text-[12px]">open_in_new</span>
+                          </button>
+                        </div>
                         <input
                           type="text"
                           value={telegramId}
                           disabled={!isTelegramSelected}
                           onChange={(e) => setTelegramId(e.target.value)}
-                          placeholder="@username 또는 챗 ID"
+                          placeholder="@username 또는 챗 ID (예: 123456789)"
                           className={`w-full rounded-lg px-3 py-2 text-xs transition-all ${isTelegramSelected
                               ? 'bg-white border border-sky-200 text-slate-900 focus:outline-none focus:border-sky-400 shadow-xs'
                               : 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed placeholder:text-slate-300'
                             }`}
                         />
-                        <p className={`text-[11px] transition-colors ${isTelegramSelected ? 'text-slate-400' : 'text-slate-300'}`}>
-                          @청년나침반_bot 추가 후 ID를 입력해주세요.
+                        <p className={`text-[11px] transition-colors ${isTelegramSelected ? 'text-slate-500' : 'text-slate-300'}`}>
+                          @청년나침반_bot 추가 후 발급받은 Chat ID 또는 username을 입력해주세요.
                         </p>
                       </div>
                     </div>
@@ -1079,58 +1210,88 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
               {/* Real-time Matched Policies Preview Card */}
               <div className="bg-white rounded-2xl p-5 shadow-sm border border-sky-100 space-y-4" style={{ wordBreak: 'keep-all' }}>
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-bold text-slate-900">실시간 매칭 예상 정책</span>
-                  {hasProfileData && matchCount > 0 ? (
-                    <span className="px-2.5 py-0.5 rounded-full bg-rose-50 border border-rose-200 text-rose-600 text-xs font-bold">
-                      {matchCount}건 적합
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">{hasProfileData ? '🎯' : '⏰'}</span>
+                    <span className="text-sm font-bold text-slate-900">
+                      {hasProfileData ? '내 설정 맞춤 공고' : '마감 임박 공고 추천'}
                     </span>
-                  ) : (
-                    <span className="px-2.5 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-400 text-xs font-medium">
-                      미설정
-                    </span>
-                  )}
+                  </div>
+                  <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border shadow-2xs ${
+                    hasProfileData
+                      ? 'bg-rose-50 border-rose-200 text-rose-600'
+                      : 'bg-amber-50 border-amber-200 text-amber-700'
+                  }`}>
+                    {hasProfileData ? `맞춤 ${displayedPolicies.length}건 / DB ${rawPolicies.length}건` : `전체 ${displayedPolicies.length}건 (마감순)`}
+                  </span>
                 </div>
-                <p className="text-xs text-slate-500">
-                  {hasProfileData && matchCount > 0
-                    ? '설정 변경 시 실시간으로 계산됩니다.'
-                    : '프로필 정보를 입력하시면 실시간 맞춤 정책이 자동으로 매칭됩니다.'}
+                
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  {hasProfileData
+                    ? `설정하신 조건(관심분야 ${interests.length > 0 ? `[${interests.join(', ')}]` : '전체'}, 지역, 연령, 취업상태)에 정확히 일치하는 DB 공고만 선별한 결과입니다.`
+                    : '프로필 미설정 상태입니다. 전체 DB 공고가 마감 임박순으로 우선 노출됩니다.'}
                 </p>
-                {hasProfileData && matchCount > 0 ? (
-                  <div className="space-y-2.5 pt-1">
-                    {/* Matched mini item 1 */}
-                    <div className="p-3 rounded-xl bg-slate-50/80 border border-slate-100 hover:border-sky-200 transition-colors space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="px-2 py-0.5 rounded-md bg-sky-100 text-sky-700 text-[11px] font-bold">98% 일치</span>
-                        <span className="text-xs text-rose-600 font-bold">D-5 마감</span>
-                      </div>
-                      <h4 className="text-xs font-bold text-slate-900">2025 서울시 청년수당 1차</h4>
-                      <p className="text-xs text-slate-500">월 50만원 × 최대 6개월 구직지원</p>
-                    </div>
-                    {/* Matched mini item 2 */}
-                    <div className="p-3 rounded-xl bg-slate-50/80 border border-slate-100 hover:border-sky-200 transition-colors space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="px-2 py-0.5 rounded-md bg-teal-100 text-teal-700 text-[11px] font-bold">95% 일치</span>
-                        <span className="text-xs text-teal-700 font-semibold">상시 접수</span>
-                      </div>
-                      <h4 className="text-xs font-bold text-slate-900">청년월세 한시 특별지원 2차</h4>
-                      <p className="text-xs text-slate-500">월세 거주 및 연소득 조건 완벽 부합</p>
-                    </div>
-                    {/* Matched mini item 3 */}
-                    <div className="p-3 rounded-xl bg-slate-50/80 border border-slate-100 hover:border-sky-200 transition-colors space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-700 text-[11px] font-bold">92% 일치</span>
-                        <span className="text-xs text-slate-500 font-medium">매월 1~10일</span>
-                      </div>
-                      <h4 className="text-xs font-bold text-slate-900">청년도약계좌 2025</h4>
-                      <p className="text-xs text-slate-500">정부 기여금 매월 최대 24,000원 추가</p>
-                    </div>
+
+                {policiesLoading ? (
+                  <div className="p-8 text-center text-slate-400 text-xs animate-pulse">공고 목록을 불러오는 중...</div>
+                ) : displayedPolicies.length > 0 ? (
+                  <div className="space-y-2.5 pt-1 max-h-[420px] overflow-y-auto pr-0.5">
+                    {displayedPolicies.slice(0, 5).map((p) => {
+                      const badgeBg =
+                        p.category === '주거'
+                          ? 'bg-rose-50 text-rose-600 border-rose-200'
+                          : p.category === '일자리'
+                          ? 'bg-amber-50 text-amber-700 border-amber-200'
+                          : p.category === '교육·직업훈련'
+                          ? 'bg-blue-50 text-blue-700 border-blue-200'
+                          : p.category === '금융·복지·문화'
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : 'bg-purple-50 text-purple-700 border-purple-200';
+
+                      return (
+                        <div
+                          key={p.id}
+                          onClick={() => onNavigate?.('detail', p.id)}
+                          className="p-3.5 rounded-xl bg-slate-50/90 border border-slate-100 hover:border-sky-300 hover:bg-sky-50/40 transition-all space-y-1.5 cursor-pointer group shadow-2xs"
+                        >
+                          <div className="flex items-center justify-between gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${badgeBg}`}>
+                                {p.category}
+                              </span>
+                              {hasProfileData && p.matchScore && (
+                                <span className="px-2 py-0.5 rounded-md bg-sky-100 text-sky-700 text-[10px] font-extrabold border border-sky-200">
+                                  {p.matchScore}% 일치
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-xs text-rose-600 font-bold shrink-0">
+                              {p.dDay || p.status || '접수중'}
+                            </span>
+                          </div>
+
+                          <h4 className="text-xs font-bold text-slate-900 group-hover:text-sky-600 transition-colors line-clamp-1" title={p.title}>
+                            {p.title}
+                          </h4>
+
+                          <p className="text-[11px] text-slate-500 line-clamp-1">
+                            {p.benefitSummary || p.targetAge || '지원 세부 사항 확인'}
+                          </p>
+
+                          {(p as any).aiMatchReason && hasProfileData && (
+                            <div className="text-[10px] text-teal-700 bg-teal-50 px-2 py-0.5 rounded-md inline-block font-semibold border border-teal-200/50">
+                              {(p as any).aiMatchReason}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="p-6 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-center space-y-2">
-                    <span className="material-symbols-outlined text-slate-400 text-3xl">tune</span>
+                    <span className="text-2xl">🔍</span>
                     <p className="text-xs text-slate-500 leading-relaxed font-medium">
-                      왼쪽에서 프로필 조건을 입력하시면<br />
-                      <strong className="text-slate-700 font-semibold">실시간 맞춤 적합 건수</strong>가 계산됩니다.
+                      설정하신 조건과 일치하는 공고가 없습니다.<br />
+                      <strong className="text-slate-700 font-semibold">관심분야나 조건을 조정</strong>해 보세요.
                     </p>
                   </div>
                 )}
@@ -1168,6 +1329,180 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
           </div>
         </div>
       </div>
+
+      {/* ========================================================================= */}
+      {/* 텔레그램 알림봇 설정 가이드 이미지 모달 팝업 */}
+      {/* ========================================================================= */}
+      {showTelegramGuide && (
+        <div 
+          className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+          onClick={() => setShowTelegramGuide(false)}
+        >
+          <div 
+            className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-sky-200 overflow-hidden my-8 animate-in fade-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="relative bg-gradient-to-r from-sky-500 via-sky-600 to-[#229ED9] p-6 text-white">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-white shadow-inner">
+                    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="text-lg md:text-xl font-extrabold tracking-tight">텔레그램 알림봇 간편 설정 가이드</h3>
+                    <p className="text-xs text-sky-100 mt-0.5">맞춤 정책 신규 공고 및 D-Day 마감 알림을 실시간 수신하세요</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowTelegramGuide(false)}
+                  className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center transition-colors cursor-pointer"
+                  title="닫기"
+                >
+                  <span className="material-symbols-outlined text-[20px]">close</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto">
+              {/* Infographic Image Card */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-base">📱</span>
+                    <span>텔레그램 알림봇 설정 가이드 (100% 한글 안내)</span>
+                  </span>
+                  <span className="text-[11px] text-sky-600 bg-sky-50 px-2.5 py-0.5 rounded-full border border-sky-200 font-bold">
+                    단계별 한글 가이드
+                  </span>
+                </div>
+                <div className="relative rounded-2xl overflow-hidden border border-slate-200 shadow-sm group bg-slate-50">
+                  <img 
+                    src="/telegram_guide_ko.jpg" 
+                    alt="텔레그램 알림봇 설정 가이드 (한글)" 
+                    className="w-full h-auto object-cover transform hover:scale-[1.01] transition-transform duration-300"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = '/telegram_bot_guide.jpg';
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Step-by-Step Action Details */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">상세 연동 절차</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  {/* Step 1 */}
+                  <div className="p-3.5 rounded-2xl bg-sky-50/50 border border-sky-100 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-sky-600 text-white font-bold text-[11px] flex items-center justify-center shadow-xs">1</span>
+                      <span className="font-bold text-slate-900">텔레그램에서 봇 검색</span>
+                    </div>
+                    <p className="text-slate-600 leading-relaxed text-[11px]">
+                      텔레그램 앱 검색창에 <code className="bg-sky-100 text-sky-800 px-1 py-0.5 rounded font-mono font-bold">@youth_compass_bot</code> 입력
+                    </p>
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={handleCopyBotUsername}
+                        className="px-2.5 py-1 rounded-lg bg-white border border-sky-200 hover:bg-sky-50 text-sky-700 font-bold text-[11px] transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
+                      >
+                        <span className="material-symbols-outlined text-[13px]">{copiedBotId ? 'check' : 'content_copy'}</span>
+                        <span>{copiedBotId ? '복사 완료!' : '아이디 복사'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Step 2 */}
+                  <div className="p-3.5 rounded-2xl bg-indigo-50/50 border border-indigo-100 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-indigo-600 text-white font-bold text-[11px] flex items-center justify-center shadow-xs">2</span>
+                      <span className="font-bold text-slate-900">대화 시작 (/start)</span>
+                    </div>
+                    <p className="text-slate-600 leading-relaxed text-[11px]">
+                      채팅방 하단의 <strong className="text-indigo-700">[시작]</strong> 버튼을 누르거나 <code className="bg-indigo-100 text-indigo-800 px-1 py-0.5 rounded font-mono font-bold">/start</code> 메시지 전송
+                    </p>
+                  </div>
+
+                  {/* Step 3 */}
+                  <div className="p-3.5 rounded-2xl bg-teal-50/50 border border-teal-100 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-teal-600 text-white font-bold text-[11px] flex items-center justify-center shadow-xs">3</span>
+                      <span className="font-bold text-slate-900">나의 Chat ID 확인</span>
+                    </div>
+                    <p className="text-slate-600 leading-relaxed text-[11px]">
+                      봇이 자동으로 회신해주는 본인 고유의 <strong className="text-teal-700">Chat ID (예: 123456789)</strong> 확인
+                    </p>
+                  </div>
+
+                  {/* Step 4 */}
+                  <div className="p-3.5 rounded-2xl bg-amber-50/50 border border-amber-100 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-amber-600 text-white font-bold text-[11px] flex items-center justify-center shadow-xs">4</span>
+                      <span className="font-bold text-slate-900">프로필에 입력 &amp; 저장</span>
+                    </div>
+                    <p className="text-slate-600 leading-relaxed text-[11px]">
+                      확인한 Chat ID를 텔레그램 ID 입력란에 입력 후 <strong className="text-amber-700">[설정 저장]</strong> 클릭
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Simulation Test Box */}
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-slate-50 to-sky-50/60 border border-sky-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-sky-100 text-sky-700 flex items-center justify-center font-bold text-sm shrink-0">
+                    🔔
+                  </div>
+                  <div>
+                    <span className="text-xs font-bold text-slate-800">알림 연동 테스트</span>
+                    <p className="text-[11px] text-slate-500">정상적으로 알림이 수신되는지 가상 테스트를 진행합니다.</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSendTestTelegramAlert}
+                  className="px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer whitespace-nowrap"
+                >
+                  {testAlertSent ? '발송 완료 ✅' : '테스트 알림 발송'}
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-3">
+              <span className="text-xs text-slate-500">
+                문의: 청년나침반 봇 고객센터
+              </span>
+              <div className="flex items-center gap-2">
+                <a
+                  href="https://t.me/youth_compass_bot"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2 rounded-xl bg-[#229ED9] hover:bg-[#1e8cc0] text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm shadow-sky-200 cursor-pointer"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z" />
+                  </svg>
+                  <span>텔레그램 봇 열기</span>
+                  <span className="material-symbols-outlined text-[13px]">open_in_new</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setShowTelegramGuide(false)}
+                  className="px-4 py-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs font-bold transition-colors cursor-pointer"
+                >
+                  확인 완료
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 };
