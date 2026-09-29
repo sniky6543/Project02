@@ -12,6 +12,7 @@ node_modules/
 dist/
 dist-ssr/
 *.local
+*.msi
 
 # Environment Variables & Secrets (CRITICAL SECURITY)
 .env
