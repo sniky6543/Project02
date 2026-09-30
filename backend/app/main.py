@@ -65,13 +65,24 @@ if db_url and not db_url.startswith("http"):
 # ==============================================================================
 from app.core.config import settings
 from app.database import init_db
-from app.routers import policies_router, profile_router, bookmarks_router
+from app.services.scheduler import start_scheduler, stop_scheduler
+from app.routers import (
+    policies_router,
+    profile_router,
+    bookmarks_router,
+    notifications_router,
+    scheduler_router
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 서버 기동 시 DB 테이블 초기화
+    # 1. 서버 기동 시 DB 테이블 초기화
     await init_db()
+    # 2. 매일 12:00, 18:30 정책 자동 수집 스케줄러 가동
+    start_scheduler()
     yield
+    # 3. 서버 종료 시 스케줄러 안전 종료
+    stop_scheduler()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -113,6 +124,14 @@ app.include_router(profile_router, prefix="/api/profile", tags=["Profile (API)"]
 app.include_router(bookmarks_router, prefix="/bookmarks", tags=["Bookmarks"])
 app.include_router(bookmarks_router, prefix="/api/bookmarks", tags=["Bookmarks (API)"])
 
+app.include_router(notifications_router, prefix="/notifications", tags=["Notifications"])
+app.include_router(notifications_router, prefix="/api/notifications", tags=["Notifications (API)"])
+
+app.include_router(scheduler_router, prefix="/scheduler", tags=["Scheduler"])
+app.include_router(scheduler_router, prefix="/api/scheduler", tags=["Scheduler (API)"])
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+

@@ -2,6 +2,8 @@ from app.models.base import Base
 from app.models.policy import Policy, PolicyDocument
 from app.models.user import User, UserBookmark
 from app.models.recommendation import AIRecommendationLog
+from app.models.notification import NotificationLog
+from app.models.unified_policy import UnifiedPolicy
 
 __all__ = [
     "Base",
@@ -10,4 +12,8 @@ __all__ = [
     "User",
     "UserBookmark",
     "AIRecommendationLog",
+    "NotificationLog",
+    "UnifiedPolicy",
 ]
+
+
