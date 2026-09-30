@@ -15,14 +15,10 @@ export interface PolicyItem {
   matchScore?: number;
   viewCount?: number;
   isBookmarked?: boolean;
-  source?: string;
 }
 
 export interface PolicyDetail extends PolicyItem {
   period: string;
-  applyPeriod?: string;
-  bizPeriod?: string;
-  summary?: string;
   benefit: {
     amount: string;
     totalMax: string;

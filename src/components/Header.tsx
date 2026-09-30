@@ -1,5 +1,4 @@
 import React from 'react';
-import { useProfileNickname } from '../utils/profileStorage';
 
 export type TabKey = 
   | 'home'
@@ -16,10 +15,6 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ activeTab, onNavigate }) => {
-  const nickname = useProfileNickname('');
-  const hasNickname = Boolean(nickname && nickname.trim());
-  const avatarText = hasNickname ? (nickname.length > 2 ? nickname.slice(0, 2) : nickname) : '';
-
   const isHome = activeTab === 'home';
   const isExplore = activeTab === 'explore' || activeTab === 'detail';
   const isNews = activeTab === 'news';
@@ -77,8 +72,8 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onNavigate }) => {
               AI요약 뉴스
             </button>
             <button
-              onClick={() => onNavigate('calendar')}
-              className={`transition-all py-1.5 px-3.5 rounded-full text-sm font-semibold cursor-pointer ${
+              onClick={() => onNavigate('kanban')}
+              className={`transition-all py-1.5 px-3.5 rounded-full text-sm font-semibold ${
                 isCalendar
                   ? 'text-sky-600 bg-sky-50 shadow-xs'
                   : 'text-slate-600 hover:text-sky-600 hover:bg-slate-50'
@@ -129,22 +124,14 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onNavigate }) => {
 
             <button
               onClick={() => onNavigate('profile')}
-              aria-label={hasNickname ? `프로필 열기 (${nickname})` : '프로필을 설정해주세요'}
-              title={hasNickname ? `내 프로필: ${nickname}` : '프로필을 설정해주세요'}
-              className="flex items-center gap-1.5 cursor-pointer focus:outline-none group"
+              aria-label="프로필 열기"
+              className="flex items-center cursor-pointer focus:outline-none"
             >
-              {hasNickname ? (
-                <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-sky-400 to-indigo-400 p-[2px] shadow-sm group-hover:scale-105 transition-transform">
-                  <div className="w-full h-full rounded-full bg-white flex items-center justify-center text-sky-600 font-semibold text-xs px-0.5 truncate text-center">
-                    {avatarText}
-                  </div>
+              <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-sky-400 to-indigo-400 p-[2px] shadow-sm">
+                <div className="w-full h-full rounded-full bg-white flex items-center justify-center text-sky-600 font-semibold text-xs">
+                  민우
                 </div>
-              ) : (
-                <div className="flex items-center gap-1.5 py-1 px-2.5 rounded-full bg-sky-50 hover:bg-sky-100/80 border border-sky-200 text-sky-700 text-xs font-semibold shadow-xs transition-all">
-                  <span className="w-2 h-2 rounded-full bg-sky-500 animate-pulse" />
-                  <span>프로필 설정</span>
-                </div>
-              )}
+              </div>
             </button>
           </div>
         </div>

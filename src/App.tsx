@@ -12,19 +12,14 @@ import ProfileView from './views/ProfileView';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabKey>('home');
-  const [selectedPolicyId, setSelectedPolicyId] = useState<string | null>(null);
   const [showQuickSwitcher, setShowQuickSwitcher] = useState(true);
 
   // Scroll to top on view change
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [activeTab, selectedPolicyId]);
+  }, [activeTab]);
 
-  const handleNavigate = (path: string, policyId?: string) => {
-    if (policyId) {
-      setSelectedPolicyId(policyId);
-    }
-
+  const handleNavigate = (path: string) => {
     switch (path) {
       case 'home':
       case 'home-recommendations':
@@ -39,14 +34,13 @@ export const App: React.FC = () => {
       case 'policy-detail':
         setActiveTab('detail');
         break;
-      case 'calendar':
+      case 'kanban':
       case 'deadline-calendar':
+        setActiveTab('kanban');
+        break;
+      case 'calendar':
       case 'deadline-calendar-month':
         setActiveTab('calendar');
-        break;
-      case 'kanban':
-      case 'deadline-calendar-kanban':
-        setActiveTab('kanban');
         break;
       case 'news':
       case 'ai-briefing-news':
@@ -83,9 +77,7 @@ export const App: React.FC = () => {
       <div className="flex-1 flex flex-col">
         {activeTab === 'home' && <HomeView onNavigate={handleNavigate} />}
         {activeTab === 'explore' && <ExploreView onNavigate={handleNavigate} />}
-        {activeTab === 'detail' && (
-          <DetailView onNavigate={handleNavigate} policyId={selectedPolicyId} />
-        )}
+        {activeTab === 'detail' && <DetailView onNavigate={handleNavigate} />}
         {activeTab === 'kanban' && <KanbanView onNavigate={handleNavigate} />}
         {activeTab === 'calendar' && <CalendarView onNavigate={handleNavigate} />}
         {activeTab === 'news' && <NewsView onNavigate={handleNavigate} />}
