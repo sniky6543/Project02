@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { getPolicies, getBookmarkedPolicyIds } from '../api/supabasePolicies';
+import { getAllPolicies, getBookmarkedPolicyIds } from '../api/supabasePolicies';
 import { PolicyItem } from '../types/policy';
 import { usePersonalizedPolicies } from '../utils/policyMatcher';
 
@@ -29,13 +29,13 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ onNavigate }) => {
   const [viewMonth, setViewMonth] = useState<number>(today.getMonth()); // 0-indexed
   const [selectedDay, setSelectedDay] = useState<number | null>(today.getDate());
 
-  // Supabase 데이터 및 북마크 로드
+  // Supabase 데이터 및 북마크 로드 (전체 데이터 로드)
   useEffect(() => {
     async function loadData() {
       setLoading(true);
       try {
         const [allPolicies, savedIds] = await Promise.all([
-          getPolicies({ limit: 200 }),
+          getAllPolicies(),
           getBookmarkedPolicyIds('guest_user'),
         ]);
         setRawPolicies(allPolicies);

@@ -7,7 +7,7 @@ import {
   EMPTY_PROFILE_SETTINGS,
   DEMO_PROFILE_SETTINGS,
 } from '../utils/profileStorage';
-import { getPolicies } from '../api/supabasePolicies';
+import { getAllPolicies } from '../api/supabasePolicies';
 import { PolicyItem } from '../types/policy';
 import { calculatePolicyMatch } from '../utils/policyMatcher';
 import { KOREA_REGIONS, KOREA_CITIES } from '../utils/regionData';
@@ -28,7 +28,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
     async function loadData() {
       setPoliciesLoading(true);
       try {
-        const data = await getPolicies({ limit: 100 });
+        const data = await getAllPolicies();
         setRawPolicies(data);
       } catch (err) {
         console.error('Failed to load policies in ProfileView:', err);

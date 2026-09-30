@@ -55,4 +55,14 @@ export interface PolicyFilterParams {
   sortBy?: 'latest' | 'popular' | 'deadline' | 'matchScore';
   page?: number;
   limit?: number;
+  pageSize?: number;
 }
+
+export interface PaginatedPolicyResult {
+  policies: PolicyItem[];
+  totalCount: number;
+  totalPages: number;
+  currentPage: number;
+  pageSize: number;
+}
+

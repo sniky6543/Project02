@@ -1,6 +1,6 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { PolicyItem, PolicyDetail, PolicyFilterParams, PolicyCategory } from '../types/policy';
-import { MOCK_POLICIES } from './mockData';
+import { PolicyItem, PolicyDetail, PolicyFilterParams, PolicyCategory, PaginatedPolicyResult } from '../types/policy';
+import { MOCK_POLICIES, getMockPolicies } from './mockData';
 
 // 카테고리별 뱃지 컬러 매핑
 const CATEGORY_COLOR_MAP: Record<string, string> = {
@@ -132,53 +132,199 @@ export function mapRowToPolicyDetail(row: any, documents: string[] = [], isBookm
   };
 }
 
-// 1. 정책 목록 조회 (unified_policies 우선 조회)
-export async function getPolicies(params?: PolicyFilterParams): Promise<PolicyItem[]> {
+// 1. 서버 사이드 페이지네이션 정책 목록 조회
+export async function getPaginatedPolicies(
+  params?: PolicyFilterParams
+): Promise<PaginatedPolicyResult> {
+  const page = Math.max(1, params?.page || 1);
+  const pageSize = Math.max(1, params?.pageSize || params?.limit || 12);
+
   if (!isSupabaseConfigured) {
     console.info('ℹ️ [Supabase] 환경 변수가 설정되지 않아 Mock 데이터를 반환합니다.');
-    return MOCK_POLICIES.map((p) => ({ ...p }));
+    const mockRes = getMockPolicies(params);
+    return {
+      policies: mockRes.policies,
+      totalCount: mockRes.totalCount,
+      totalPages: mockRes.totalPages,
+      currentPage: mockRes.currentPage,
+      pageSize,
+    };
   }
 
-  try {
-    // 1차: unified_policies 테이블 조회
-    let table = 'unified_policies';
-    let { data, error } = await supabase.from(table).select('*').limit(params?.limit || 50);
+  const tables = ['policies', 'unified_policies'];
 
-    // unified_policies가 없으면 policies 테이블 시도
-    if (error || !data || data.length === 0) {
-      table = 'policies';
-      const fallbackRes = await supabase.from(table).select('*').limit(params?.limit || 50);
-      data = fallbackRes.data;
-      error = fallbackRes.error;
+  for (const table of tables) {
+    try {
+      let query = supabase.from(table).select('*', { count: 'exact' });
+
+      // 카테고리 필터
+      if (params?.category && params.category !== '전체') {
+        query = query.eq('category', params.category);
+      }
+
+      // 키워드 검색
+      if (params?.keyword && params.keyword.trim()) {
+        const kw = params.keyword.trim();
+        query = query.or(`title.ilike.%${kw}%,benefit_summary.ilike.%${kw}%,organization.ilike.%${kw}%`);
+      }
+
+      // 취업 상태 필터
+      if (params?.employment && params.employment !== '제한없음') {
+        query = query.or(
+          `employment_condition.ilike.%${params.employment}%,employment_condition.ilike.%제한없음%,employment_condition.ilike.%무관%`
+        );
+      }
+
+      // 정렬
+      if (params?.sortBy === 'popular') {
+        query = query.order('view_count', { ascending: false, nullsFirst: false });
+      } else if (params?.sortBy === 'deadline') {
+        query = query.order('period_end', { ascending: true, nullsFirst: false });
+      } else if (params?.sortBy === 'latest') {
+        query = query.order('created_at', { ascending: false, nullsFirst: false });
+      } else {
+        // 기본 최신/id 역순
+        query = query.order('created_at', { ascending: false, nullsFirst: false });
+      }
+
+      // 서버 사이드 페이지네이션 (Range)
+      const from = (page - 1) * pageSize;
+      const to = from + pageSize - 1;
+      query = query.range(from, to);
+
+      const { data, count, error } = await query;
+
+      if (!error && data && data.length >= 0) {
+        const totalCount = count !== null ? count : data.length;
+        const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+        const items = data.map((row) => mapRowToPolicyItem(row));
+
+        return {
+          policies: items,
+          totalCount,
+          totalPages,
+          currentPage: page,
+          pageSize,
+        };
+      }
+    } catch (err) {
+      console.warn(`[Supabase] Table ${table} query failed, trying fallback:`, err);
     }
-
-    if (error || !data || data.length === 0) {
-      console.warn('Supabase getPolicies empty or error:', error);
-      return MOCK_POLICIES.map((p) => ({ ...p }));
-    }
-
-    let items = data.map((row) => mapRowToPolicyItem(row));
-
-    // 클라이언트 필터링
-    if (params?.category && params.category !== '전체') {
-      items = items.filter((item) => item.category === params.category);
-    }
-    if (params?.keyword) {
-      const kw = params.keyword.toLowerCase();
-      items = items.filter(
-        (item) =>
-          item.title.toLowerCase().includes(kw) ||
-          item.benefitSummary.toLowerCase().includes(kw) ||
-          item.organization.toLowerCase().includes(kw)
-      );
-    }
-
-    return items;
-  } catch (err) {
-    console.error('Failed to fetch policies from Supabase:', err);
-    return MOCK_POLICIES.map((p) => ({ ...p }));
   }
+
+  // Fallback to Mock
+  const mockRes = getMockPolicies(params);
+  return {
+    policies: mockRes.policies,
+    totalCount: mockRes.totalCount,
+    totalPages: mockRes.totalPages,
+    currentPage: mockRes.currentPage,
+    pageSize,
+  };
 }
+
+// 2. 전체 정책 데이터 일괄 로드 (Supabase 1000건 제한 대응 배치 로딩)
+export async function getAllPolicies(): Promise<PolicyItem[]> {
+  if (!isSupabaseConfigured) {
+    return MOCK_POLICIES.map((p) => ({ ...p }));
+  }
+
+  const tables = ['policies', 'unified_policies'];
+
+  for (const table of tables) {
+    try {
+      // 1. 전체 개수 먼저 파악
+      const { count, error: countErr } = await supabase
+        .from(table)
+        .select('*', { count: 'exact', head: true });
+
+      if (countErr || count === null || count === 0) continue;
+
+      const totalCount = count;
+      const batchSize = 1000;
+      const batches = Math.ceil(totalCount / batchSize);
+
+      const promises = Array.from({ length: batches }, (_, i) => {
+        const from = i * batchSize;
+        const to = Math.min(from + batchSize - 1, totalCount - 1);
+        return supabase.from(table).select('*').range(from, to).order('created_at', { ascending: false, nullsFirst: false });
+      });
+
+      const results = await Promise.all(promises);
+      const allRows: any[] = [];
+      for (const res of results) {
+        if (res.data) allRows.push(...res.data);
+      }
+
+      if (allRows.length > 0) {
+        return allRows.map((row) => mapRowToPolicyItem(row));
+      }
+    } catch (err) {
+      console.warn(`[Supabase] getAllPolicies on ${table} failed:`, err);
+    }
+  }
+
+  return MOCK_POLICIES.map((p) => ({ ...p }));
+}
+
+// 3. 카테고리별 실시간 데이터 개수 통계 조회
+export async function getCategoryCounts(): Promise<Record<string, number>> {
+  const defaultCounts: Record<string, number> = {
+    전체: 0,
+    일자리: 0,
+    주거: 0,
+    '교육·직업훈련': 0,
+    '금융·복지·문화': 0,
+    '참여·기반': 0,
+  };
+
+  if (!isSupabaseConfigured) {
+    defaultCounts.전체 = MOCK_POLICIES.length;
+    MOCK_POLICIES.forEach((p) => {
+      if (defaultCounts[p.category] !== undefined) defaultCounts[p.category]++;
+    });
+    return defaultCounts;
+  }
+
+  const tables = ['policies', 'unified_policies'];
+  for (const table of tables) {
+    try {
+      const categories = ['일자리', '주거', '교육·직업훈련', '금융·복지·문화', '참여·기반'];
+      const totalPromise = supabase.from(table).select('*', { count: 'exact', head: true });
+      const categoryPromises = categories.map((cat) =>
+        supabase.from(table).select('*', { count: 'exact', head: true }).eq('category', cat)
+      );
+
+      const [totalRes, ...catResults] = await Promise.all([totalPromise, ...categoryPromises]);
+
+      if (totalRes.count !== null && totalRes.count > 0) {
+        const result: Record<string, number> = {
+          전체: totalRes.count,
+          일자리: catResults[0].count || 0,
+          주거: catResults[1].count || 0,
+          '교육·직업훈련': catResults[2].count || 0,
+          '금융·복지·문화': catResults[3].count || 0,
+          '참여·기반': catResults[4].count || 0,
+        };
+        return result;
+      }
+    } catch (err) {
+      console.warn(`[Supabase] getCategoryCounts on ${table} failed:`, err);
+    }
+  }
+
+  return defaultCounts;
+}
+
+// 4. 기존 getPolicies 호환 함수 (limit 및 기본 페이지네이션 지원)
+export async function getPolicies(params?: PolicyFilterParams): Promise<PolicyItem[]> {
+  const result = await getPaginatedPolicies({
+    ...params,
+    pageSize: params?.limit || params?.pageSize || 50,
+  });
+  return result.policies;
+}
+
 
 // 2. 정책 상세 조회
 export async function getPolicyDetail(id: string): Promise<PolicyDetail | null> {

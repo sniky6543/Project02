@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useProfileNickname } from '../utils/profileStorage';
-import { getPolicies } from '../api/supabasePolicies';
+import { getAllPolicies, getCategoryCounts } from '../api/supabasePolicies';
 import { PolicyItem, PolicyCategory } from '../types/policy';
 import { usePersonalizedPolicies } from '../utils/policyMatcher';
 
@@ -16,12 +16,12 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
   const [loading, setLoading] = useState<boolean>(true);
   const [selectedCategory, setSelectedCategory] = useState<string>('전체');
 
-  // Supabase 실데이터 조회
+  // Supabase 실데이터 조회 (전체 데이터 로드)
   useEffect(() => {
     async function loadData() {
       setLoading(true);
       try {
-        const data = await getPolicies({ limit: 100 });
+        const data = await getAllPolicies();
         setRawPolicies(data);
       } catch (err) {
         console.error('Failed to load policies in HomeView:', err);

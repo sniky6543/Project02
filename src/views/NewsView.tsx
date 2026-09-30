@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { getPolicies } from '../api/supabasePolicies';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { getPaginatedPolicies } from '../api/supabasePolicies';
 import { PolicyItem } from '../types/policy';
 import { usePersonalizedPolicies } from '../utils/policyMatcher';
 
@@ -9,6 +9,8 @@ interface NewsViewProps {
 
 export const NewsView: React.FC<NewsViewProps> = ({ onNavigate }) => {
   const [rawPolicies, setRawPolicies] = useState<PolicyItem[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [totalPages, setTotalPages] = useState<number>(1);
   const [loading, setLoading] = useState<boolean>(true);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [activeSearch, setActiveSearch] = useState<string>('');
@@ -16,24 +18,34 @@ export const NewsView: React.FC<NewsViewProps> = ({ onNavigate }) => {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const pageSize = 6;
 
+  // Supabase 실데이터 서버 사이드 페이지네이션 로드
+  const fetchNews = useCallback(async () => {
+    setLoading(true);
+    try {
+      const sortParam = sortBy === 'popular' ? 'popular' : sortBy === 'latest' ? 'latest' : undefined;
+      const result = await getPaginatedPolicies({
+        page: currentPage,
+        pageSize,
+        keyword: activeSearch.trim() || undefined,
+        sortBy: sortParam,
+      });
+
+      setRawPolicies(result.policies);
+      setTotalCount(result.totalCount);
+      setTotalPages(result.totalPages);
+    } catch (err) {
+      console.error('Failed to load policies in NewsView:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [currentPage, pageSize, activeSearch, sortBy]);
+
+  useEffect(() => {
+    fetchNews();
+  }, [fetchNews]);
+
   // 사용자 프로필 정보 기반 맞춤 점수 계산 및 우선순위 정렬
   const { policies, profile, hasProfile } = usePersonalizedPolicies(rawPolicies);
-
-  // Supabase 실데이터 로드
-  useEffect(() => {
-    async function loadData() {
-      setLoading(true);
-      try {
-        const data = await getPolicies({ limit: 100 });
-        setRawPolicies(data);
-      } catch (err) {
-        console.error('Failed to load policies in NewsView:', err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadData();
-  }, []);
 
   // data-path 이벤트 처리
   useEffect(() => {
@@ -52,33 +64,6 @@ export const NewsView: React.FC<NewsViewProps> = ({ onNavigate }) => {
     return () => document.removeEventListener('click', handleDataPath);
   }, [onNavigate]);
 
-  // 검색 및 정렬 필터링
-  const filteredPolicies = useMemo(() => {
-    let list = [...policies];
-    if (activeSearch.trim()) {
-      const q = activeSearch.trim().toLowerCase();
-      list = list.filter(
-        (p) =>
-          p.title.toLowerCase().includes(q) ||
-          p.benefitSummary.toLowerCase().includes(q) ||
-          p.organization.toLowerCase().includes(q) ||
-          p.category.toLowerCase().includes(q)
-      );
-    }
-    if (sortBy === 'popular') {
-      list.sort((a, b) => (b.viewCount || 0) - (a.viewCount || 0));
-    } else if (sortBy === 'match') {
-      list.sort((a, b) => (b.matchScore || 85) - (a.matchScore || 85));
-    }
-    return list;
-  }, [policies, activeSearch, sortBy]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredPolicies.length / pageSize));
-  const paginatedList = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredPolicies.slice(start, start + pageSize);
-  }, [filteredPolicies, currentPage, pageSize]);
-
   const handleSearchSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setActiveSearch(searchTerm);
@@ -91,14 +76,20 @@ export const NewsView: React.FC<NewsViewProps> = ({ onNavigate }) => {
     setCurrentPage(1);
   };
 
+  const handlePageChange = (newPage: number) => {
+    if (newPage < 1 || newPage > totalPages || newPage === currentPage) return;
+    setCurrentPage(newPage);
+    window.scrollTo({ top: 250, behavior: 'smooth' });
+  };
+
   return (
     <main className="flex-1 w-full pt-20 pb-16 bg-[#f8fafc] max-w-[1240px] mx-auto px-4 md:px-8">
       <div className="flex flex-col w-full space-y-8">
-        {/* 1. Header Title & Hero Section (Light Pastel Sky-Mint-Cream Gradient Banner) */}
+        {/* 1. Header Title & Hero Section */}
         <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-sky-100/70 via-indigo-50/50 to-teal-50/70 p-6 md:p-8 border border-sky-200/60 shadow-sm shadow-sky-100/50">
           <div className="absolute -right-8 -top-10 w-72 h-72 rounded-full bg-teal-200/30 blur-3xl pointer-events-none"></div>
           <div className="absolute left-1/3 -bottom-10 w-64 h-64 rounded-full bg-sky-200/40 blur-3xl pointer-events-none"></div>
-          
+
           <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
             <div className="space-y-2.5 max-w-2xl">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/80 border border-sky-200/70 shadow-xs text-sky-800 text-xs font-semibold backdrop-blur-md">
@@ -115,7 +106,7 @@ export const NewsView: React.FC<NewsViewProps> = ({ onNavigate }) => {
                 전국 정책 데이터베이스로부터 AI가 핵심만 3줄 요약하고 맞춤 정책 상세 정보와 즉시 연결해 드립니다.
               </p>
             </div>
-            
+
             <div className="flex items-center gap-4 bg-white/90 backdrop-blur-md rounded-2xl p-4 md:p-5 border border-sky-100 shadow-md shadow-sky-100/60 shrink-0 self-start md:self-auto">
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-100 via-sky-50 to-teal-100 border border-indigo-200 flex items-center justify-center shadow-inner shrink-0 text-sky-600">
                 <svg className="w-8 h-8 text-sky-600 drop-shadow-sm" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
@@ -125,11 +116,11 @@ export const NewsView: React.FC<NewsViewProps> = ({ onNavigate }) => {
               <div className="pr-1">
                 <div className="flex items-center gap-1.5 mb-0.5">
                   <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                  <span className="text-xs font-medium text-slate-500">실시간 분석 완료</span>
+                  <span className="text-xs font-medium text-slate-500">실시간 정책 뉴스</span>
                 </div>
                 <div className="flex items-baseline gap-1">
                   <span className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight">
-                    {policies.length}
+                    {totalCount.toLocaleString()}
                   </span>
                   <span className="text-sm font-bold text-sky-600">건</span>
                 </div>
@@ -157,6 +148,7 @@ export const NewsView: React.FC<NewsViewProps> = ({ onNavigate }) => {
                 onClick={() => {
                   setSearchTerm('');
                   setActiveSearch('');
+                  setCurrentPage(1);
                 }}
                 className="flex-1 md:flex-none px-4 py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 font-semibold text-xs flex items-center justify-center gap-1 transition-colors cursor-pointer"
                 type="button"
@@ -192,18 +184,22 @@ export const NewsView: React.FC<NewsViewProps> = ({ onNavigate }) => {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-2 border-t border-slate-200/80">
           <div className="flex items-center gap-2">
             <span className="text-base font-bold text-slate-900">실시간 큐레이션 뉴스 &amp; 정책</span>
-            <span className="text-xl font-extrabold text-sky-600">{filteredPolicies.length}</span>
-            <span className="text-sm font-bold text-slate-800">건</span>
+            <span className="text-xl font-extrabold text-sky-600">{totalCount.toLocaleString()}</span>
+            <span className="text-sm font-bold text-slate-800">건 (페이지 {currentPage} / {totalPages})</span>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             <div className="relative">
               <select
                 value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as any)}
+                onChange={(e) => {
+                  setSortBy(e.target.value as any);
+                  setCurrentPage(1);
+                }}
                 className="appearance-none pl-3 pr-8 py-1.5 bg-white text-slate-700 font-medium text-xs rounded-xl border border-slate-200 shadow-xs focus:outline-none focus:ring-2 focus:ring-sky-400 cursor-pointer"
               >
                 <option value="match">내 매칭률순 ▼</option>
                 <option value="popular">인기조회순</option>
+                <option value="latest">최신등록순</option>
               </select>
             </div>
           </div>
@@ -220,13 +216,13 @@ export const NewsView: React.FC<NewsViewProps> = ({ onNavigate }) => {
               </div>
             ))}
           </div>
-        ) : paginatedList.length === 0 ? (
+        ) : policies.length === 0 ? (
           <div className="bg-white rounded-2xl p-16 text-center border border-slate-200 text-slate-500">
             <p className="text-base font-semibold">검색 조건에 맞는 뉴스가 없습니다.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {paginatedList.map((item) => {
+            {policies.map((item) => {
               const badgeBg =
                 item.category === '주거'
                   ? 'bg-rose-50 text-rose-600 border-rose-200'
@@ -249,51 +245,34 @@ export const NewsView: React.FC<NewsViewProps> = ({ onNavigate }) => {
                         <span className={`px-2 py-0.5 rounded-md text-[11px] font-bold border ${badgeBg}`}>
                           {item.category}
                         </span>
-                        <span className="px-2 py-0.5 rounded-md bg-sky-50 text-sky-700 text-[11px] font-bold">
-                          {item.dDay || item.status || '진행중'}
-                        </span>
+                        <span className="text-xs text-slate-500">{item.organization}</span>
                       </div>
-                      <span className="px-2 py-0.5 rounded-full bg-teal-50 border border-teal-200 text-teal-700 text-xs font-bold">
-                        {item.matchScore || 88}% 일치
-                      </span>
+                      <div className="flex items-center gap-1 text-[11px] font-bold text-sky-700 bg-sky-50 px-2 py-0.5 rounded-md border border-sky-100">
+                        <span>🎯</span>
+                        <span>{item.matchScore || 85}%</span>
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                      <span className="truncate max-w-[150px]">{item.organization}</span>
-                      <span>·</span>
-                      <span>실시간 분석</span>
-                    </div>
-
-                    <h2
+                    <h3
                       onClick={() => onNavigate?.('detail', item.id)}
-                      className="font-bold text-base text-slate-900 group-hover:text-sky-600 transition-colors line-clamp-2 cursor-pointer"
-                      title={item.title}
+                      className="text-base font-bold text-slate-900 group-hover:text-sky-600 transition-colors cursor-pointer line-clamp-2 leading-snug"
                     >
                       {item.title}
-                    </h2>
+                    </h3>
 
-                    <div className="p-3.5 rounded-xl bg-slate-50/80 border border-slate-100 space-y-2">
-                      <div className="flex items-center gap-1.5 text-sky-600 font-bold text-xs">
-                        <span>🤖</span>
-                        <span>AI 핵심 요약</span>
-                      </div>
-                      <p className="text-xs text-slate-600 leading-relaxed line-clamp-3">
-                        {item.benefitSummary || '지원 조건과 상세 혜택을 확인해 보세요.'}
+                    <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 text-xs text-slate-600 space-y-1.5 leading-relaxed">
+                      <p className="font-semibold text-slate-800 flex items-center gap-1">
+                        <span className="text-teal-600">✨ AI 핵심 요약</span>
                       </p>
-                    </div>
-
-                    <div
-                      onClick={() => onNavigate?.('detail', item.id)}
-                      className="px-3 py-2 rounded-xl bg-sky-50 hover:bg-sky-100/70 border border-sky-100 text-sky-700 text-xs font-semibold flex items-center justify-between transition-colors cursor-pointer"
-                    >
-                      <span className="truncate">연계 정책 상세 보기</span>
-                      <span>→</span>
+                      <p className="line-clamp-3 text-slate-600">
+                        {item.benefitSummary || '청년 정책 지원 혜택 및 신청 자격 요건을 확인해 보세요.'}
+                      </p>
                     </div>
                   </div>
 
-                  <div className="mt-5 pt-3.5 border-t border-slate-100 flex items-center justify-between">
-                    <span className="text-xs text-slate-400 font-medium truncate max-w-[120px]">
-                      {item.organization}
+                  <div className="pt-4 mt-2 border-t border-slate-100 flex items-center justify-between">
+                    <span className="text-xs text-slate-500 font-medium">
+                      {item.dDay ? `⏳ ${item.dDay}` : item.status || '상시모집'}
                     </span>
                     <button
                       onClick={() => onNavigate?.('detail', item.id)}
@@ -312,38 +291,47 @@ export const NewsView: React.FC<NewsViewProps> = ({ onNavigate }) => {
 
         {/* 5. Pagination */}
         {totalPages > 1 && (
-          <div className="flex items-center justify-center gap-2 pt-2">
+          <nav aria-label="페이지 네비게이션" className="flex items-center justify-center gap-1.5 pt-4">
             <button
-              disabled={currentPage === 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="w-9 h-9 rounded-xl bg-white border border-slate-200 text-slate-600 flex items-center justify-center hover:bg-sky-50 shadow-xs transition-colors disabled:opacity-40 cursor-pointer"
+              disabled={currentPage === 1 || loading}
+              onClick={() => handlePageChange(currentPage - 1)}
+              className="w-9 h-9 rounded-xl bg-white border border-slate-200 text-slate-600 flex items-center justify-center hover:bg-sky-50 shadow-xs transition-colors disabled:opacity-40 cursor-pointer text-xs font-bold"
               type="button"
+              title="이전 페이지"
             >
               ◀
             </button>
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
-              <button
-                key={p}
-                onClick={() => setCurrentPage(p)}
-                className={`w-9 h-9 rounded-xl font-bold text-xs flex items-center justify-center shadow-sm cursor-pointer ${
-                  currentPage === p
-                    ? 'bg-sky-600 text-white'
-                    : 'bg-white border border-slate-200 text-slate-600 hover:bg-sky-50'
-                }`}
-                type="button"
-              >
-                {p}
-              </button>
-            ))}
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 2)
+              .map((p, idx, arr) => (
+                <React.Fragment key={p}>
+                  {idx > 0 && arr[idx - 1] !== p - 1 && (
+                    <span className="px-1 text-slate-400 text-xs">...</span>
+                  )}
+                  <button
+                    onClick={() => handlePageChange(p)}
+                    disabled={loading}
+                    className={`min-w-[36px] h-9 px-3 rounded-xl font-bold text-xs flex items-center justify-center shadow-xs cursor-pointer ${
+                      currentPage === p
+                        ? 'bg-sky-600 text-white shadow-sky-200 ring-2 ring-sky-300'
+                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-sky-50'
+                    }`}
+                    type="button"
+                  >
+                    {p}
+                  </button>
+                </React.Fragment>
+              ))}
             <button
-              disabled={currentPage === totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="w-9 h-9 rounded-xl bg-white border border-slate-200 text-slate-600 flex items-center justify-center hover:bg-sky-50 shadow-xs transition-colors disabled:opacity-40 cursor-pointer"
+              disabled={currentPage === totalPages || loading}
+              onClick={() => handlePageChange(currentPage + 1)}
+              className="w-9 h-9 rounded-xl bg-white border border-slate-200 text-slate-600 flex items-center justify-center hover:bg-sky-50 shadow-xs transition-colors disabled:opacity-40 cursor-pointer text-xs font-bold"
               type="button"
+              title="다음 페이지"
             >
               ▶
             </button>
-          </div>
+          </nav>
         )}
 
         {/* 6. Bottom Kakao Notification Banner */}
