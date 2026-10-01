@@ -55,12 +55,34 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         finally:
             await session.close()
 
-# 5. DB 테이블 자동 초기화 함수
+from sqlalchemy import text
+
+# 5. DB 테이블 자동 초기화 및 컬럼 마이그레이션 함수
 async def init_db():
-    """서버 시작 시 테이블 생성"""
+    """서버 시작 시 테이블 생성 및 컬럼 마이그레이션"""
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-        logger.info("✅ 데이터베이스 테이블 초기화 완료")
+            
+            # notification_logs 테이블 누락 컬럼 자동 보정
+            if settings.async_database_url.startswith("sqlite"):
+                for col_sql in [
+                    "ALTER TABLE notification_logs ADD COLUMN policy_id VARCHAR(100)",
+                    "ALTER TABLE notification_logs ADD COLUMN user_id VARCHAR(50)",
+                    "ALTER TABLE notification_logs ADD COLUMN status VARCHAR(20) DEFAULT 'SENT'"
+                ]:
+                    try:
+                        await conn.execute(text(col_sql))
+                    except Exception:
+                        pass
+            else:
+                try:
+                    await conn.execute(text("ALTER TABLE notification_logs ADD COLUMN IF NOT EXISTS policy_id VARCHAR(100)"))
+                    await conn.execute(text("ALTER TABLE notification_logs ADD COLUMN IF NOT EXISTS user_id VARCHAR(50)"))
+                    await conn.execute(text("ALTER TABLE notification_logs ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'SENT'"))
+                except Exception:
+                    pass
+
+        logger.info("✅ 데이터베이스 테이블 초기화 및 스키마 동기화 완료")
     except Exception as e:
         logger.warning(f"⚠️ 테이블 초기화 중 경고 (이미 존재하거나 권한 제한): {e}")

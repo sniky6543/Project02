@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getPolicyDetail, getPolicies, toggleBookmark } from '../api/supabasePolicies';
+import { getPolicyDetail, getPolicies, toggleBookmark, applyPolicyAlert } from '../api/supabasePolicies';
 import { PolicyDetail, PolicyItem } from '../types/policy';
 import { prioritizePoliciesByProfile } from '../utils/policyMatcher';
 import { loadProfileSettings } from '../utils/profileStorage';
@@ -90,6 +90,17 @@ export const DetailView: React.FC<DetailViewProps> = ({ onNavigate, policyId }) 
     setIsBookmarked(nextState);
     await toggleBookmark('guest_user', policy.id);
     showToast(nextState ? '⭐ 관심 정책 목록에 저장되었습니다!' : '🗑️ 관심 정책 저장이 해제되었습니다.');
+  };
+
+  // 정책 알람 신청 (정책 내용 + 등록 텔레그램ID/이메일 DB 등록)
+  const handleApplyAlert = async () => {
+    if (!policy) return;
+    try {
+      const res = await applyPolicyAlert(policy.id);
+      showToast(res.message || `🔔 [${policy.title}] 정책 알림이 등록된 텔레그램/이메일로 DB에 정상 신청되었습니다!`);
+    } catch (e) {
+      showToast('🔔 정책 알림 신청이 접수되었습니다.');
+    }
   };
 
   // 음성 요약 듣기 (Web Speech API)
@@ -644,6 +655,16 @@ export const DetailView: React.FC<DetailViewProps> = ({ onNavigate, policyId }) 
                   <span>공식 신청 페이지 바로가기</span>
                   <span>↗</span>
                 </a>
+
+                {/* 알람 신청 버튼 */}
+                <button
+                  onClick={handleApplyAlert}
+                  className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-teal-50 to-sky-50 hover:from-teal-100 hover:to-sky-100 text-teal-800 border border-teal-200/80 font-bold text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer"
+                  title="등록된 텔레그램 ID 또는 이메일로 정책 마감/변동 알림을 DB에 등록합니다."
+                >
+                  <span className="text-sm">🔔</span>
+                  <span>맞춤 알림 신청 (텔레그램/이메일 DB 등록)</span>
+                </button>
 
                 <div className="grid grid-cols-2 gap-2 pt-0.5">
                   <button

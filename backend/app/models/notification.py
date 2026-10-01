@@ -62,10 +62,16 @@ class NotificationLog(Base):
         nullable=True, 
         comment="연계 사용자 ID (선택)"
     )
+    policy_id: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        index=True,
+        comment="연계 정책 ID (선택)"
+    )
     status: Mapped[str] = mapped_column(
         String(20), 
         default="SENT", 
-        comment="발송 상태 (SENT, SUCCESS, FAILED)"
+        comment="발송 상태 (SENT, SUCCESS, FAILED, REGISTERED)"
     )
 
     # 사용자 테이블과의 관계 설정
@@ -73,4 +79,6 @@ class NotificationLog(Base):
 
     __table_args__ = (
         Index("idx_notifications_method_sent", "send_method", "sent_at"),
+        Index("idx_notifications_policy_id", "policy_id"),
+        Index("idx_notifications_user_id", "user_id"),
     )

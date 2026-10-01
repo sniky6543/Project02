@@ -17,11 +17,14 @@ async def toggle_bookmark(
 ):
     """
     특정 정책의 북마크 상태를 반전시키고 저장합니다.
+    subscribeAlert=True 일 경우 등록된 텔레그램/이메일로 정책 알람 신청 내역도 DB에 함께 저장됩니다.
     """
+    user_id = request.userId or DEFAULT_USER_ID
     is_bookmarked, total_count = await bookmark_crud.toggle_bookmark(
         db=db,
         policy_id=request.policyId,
-        user_id=DEFAULT_USER_ID
+        user_id=user_id,
+        subscribe_alert=bool(request.subscribeAlert)
     )
     return {
         "success": True,
