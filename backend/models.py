@@ -44,3 +44,8 @@ class NotificationLog(Base):
     # 5. 발송시간
     sent_at = Column(DateTime, default=datetime.utcnow, nullable=False)  # 발송시간
 
+    # 6. 연계 정보
+    user_id = Column(String(50), nullable=True)                 # 연계 사용자 ID
+    policy_id = Column(String(100), nullable=True)              # 연계 정책 ID
+    status = Column(String(20), default="SENT")                 # 발송 상태 (SENT, REGISTERED 등)
+
