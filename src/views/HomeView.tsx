@@ -5,7 +5,11 @@ import { PolicyItem, PolicyCategory } from '../types/policy';
 import { usePersonalizedPolicies } from '../utils/policyMatcher';
 
 interface HomeViewProps {
-  onNavigate?: (path: string, policyId?: string) => void;
+  onNavigate?: (
+    path: string,
+    policyId?: string,
+    extraParams?: { category?: string; keyword?: string; employment?: string; [key: string]: any }
+  ) => void;
 }
 
 export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
@@ -72,9 +76,10 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
       if (target) {
         const path = target.getAttribute('data-path');
         const pId = target.getAttribute('data-policy-id');
+        const cat = target.getAttribute('data-category');
         if (path && onNavigate) {
           e.preventDefault();
-          onNavigate(path, pId || undefined);
+          onNavigate(path, pId || undefined, cat ? { category: cat } : undefined);
         }
       }
     };
@@ -219,10 +224,10 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
                 </p>
               </div>
               <button
-                onClick={() => onNavigate?.('explore')}
+                onClick={() => onNavigate?.('explore', undefined, { category: selectedCategory })}
                 className="text-xs font-semibold text-sky-600 hover:text-sky-700 flex items-center gap-1 cursor-pointer hover:underline"
               >
-                전체보기 ({policies.length}) →
+                전체보기 ({filteredPolicies.length > 0 ? `${filteredPolicies.length}건` : `${policies.length}건`}) →
               </button>
             </div>
 
@@ -366,7 +371,7 @@ export const HomeView: React.FC<HomeViewProps> = ({ onNavigate }) => {
                 </div>
               </div>
               <button
-                onClick={() => onNavigate?.('explore')}
+                onClick={() => onNavigate?.('explore', undefined, { category: selectedCategory !== '전체' ? selectedCategory : undefined })}
                 className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs whitespace-nowrap shadow-sm shadow-sky-200 transition-all cursor-pointer"
               >
                 전체 정책 탐색하기

@@ -4,13 +4,20 @@ import { PolicyItem, PolicyCategory } from '../types/policy';
 import { usePersonalizedPolicies } from '../utils/policyMatcher';
 
 interface ExploreViewProps {
-  onNavigate?: (path: string, policyId?: string) => void;
+  onNavigate?: (path: string, policyId?: string, extraParams?: any) => void;
+  initialParams?: {
+    category?: string;
+    keyword?: string;
+    employment?: string;
+    region?: string;
+    [key: string]: any;
+  } | null;
 }
 
 type SortOption = 'matchScore' | 'deadline' | 'latest' | 'popular';
 
-export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
-  const [isFilterOpen, setIsFilterOpen] = useState(false);
+export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate, initialParams }) => {
+  const [isFilterOpen, setIsFilterOpen] = useState<boolean>(() => Boolean(initialParams && initialParams.category && initialParams.category !== '전체'));
 
   // DB 데이터 및 서버 사이드 페이지네이션 상태
   const [rawPolicies, setRawPolicies] = useState<PolicyItem[]>([]);
@@ -28,13 +35,13 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
     '참여·기반': 0,
   });
 
-  // 검색 & 필터 상태
-  const [searchTerm, setSearchTerm] = useState<string>('');
-  const [activeSearch, setActiveSearch] = useState<string>('');
-  const [selectedCategory, setSelectedCategory] = useState<string>('전체');
-  const [selectedRegion, setSelectedRegion] = useState<string>('');
+  // 검색 & 필터 상태 (initialParams 반영)
+  const [searchTerm, setSearchTerm] = useState<string>(() => initialParams?.keyword || '');
+  const [activeSearch, setActiveSearch] = useState<string>(() => initialParams?.keyword || '');
+  const [selectedCategory, setSelectedCategory] = useState<string>(() => initialParams?.category || '전체');
+  const [selectedRegion, setSelectedRegion] = useState<string>(() => initialParams?.region || '');
   const [ageInput, setAgeInput] = useState<string>('');
-  const [selectedEmployment, setSelectedEmployment] = useState<string>('제한없음');
+  const [selectedEmployment, setSelectedEmployment] = useState<string>(() => initialParams?.employment || '제한없음');
   const [selectedSpecial, setSelectedSpecial] = useState<string>('제한없음');
   const [sortBy, setSortBy] = useState<SortOption>('latest');
 
@@ -44,6 +51,26 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
   // 페이지네이션
   const [currentPage, setCurrentPage] = useState<number>(1);
   const pageSize = 10;
+
+  // initialParams prop이 변경될 때 상태 동기화
+  useEffect(() => {
+    if (initialParams) {
+      if (initialParams.category !== undefined) {
+        setSelectedCategory(initialParams.category);
+      }
+      if (initialParams.keyword !== undefined) {
+        setSearchTerm(initialParams.keyword);
+        setActiveSearch(initialParams.keyword);
+      }
+      if (initialParams.employment !== undefined) {
+        setSelectedEmployment(initialParams.employment);
+      }
+      if (initialParams.region !== undefined) {
+        setSelectedRegion(initialParams.region);
+      }
+      setCurrentPage(1);
+    }
+  }, [initialParams]);
 
   // 1. 카테고리별 전체 카운트 로드 (마운트 시 1회)
   useEffect(() => {
