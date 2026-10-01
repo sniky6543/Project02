@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { getPolicies } from '../api/supabasePolicies';
+import { getAllPolicies } from '../api/supabasePolicies';
 import { PolicyItem } from '../types/policy';
 import { usePersonalizedPolicies } from '../utils/policyMatcher';
 
@@ -15,12 +15,12 @@ export const KanbanView: React.FC<KanbanViewProps> = ({ onNavigate }) => {
   // 사용자 프로필 정보 기반 맞춤 점수 계산 및 우선순위 정렬
   const { policies, profile, hasProfile } = usePersonalizedPolicies(rawPolicies);
 
-  // Supabase 정책 데이터 로드
+  // Supabase 정책 데이터 로드 (전체 데이터 로드)
   useEffect(() => {
     async function loadData() {
       setLoading(true);
       try {
-        const data = await getPolicies({ limit: 100 });
+        const data = await getAllPolicies();
         setRawPolicies(data);
       } catch (err) {
         console.error('Failed to load policies in KanbanView:', err);

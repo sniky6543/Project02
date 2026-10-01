@@ -15,6 +15,13 @@ from app.crud.bookmark import (
     toggle_bookmark,
     get_user_bookmarks,
 )
+from app.crud.notification import (
+    create_notification_log,
+    apply_policy_alert,
+    fetch_policy_metadata,
+    get_notification_logs,
+    get_notification_by_no,
+)
 
 __all__ = [
     "get_policies",
@@ -28,4 +35,9 @@ __all__ = [
     "DEFAULT_USER_ID",
     "toggle_bookmark",
     "get_user_bookmarks",
+    "create_notification_log",
+    "apply_policy_alert",
+    "fetch_policy_metadata",
+    "get_notification_logs",
+    "get_notification_by_no",
 ]
