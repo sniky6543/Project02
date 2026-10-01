@@ -17,6 +17,39 @@ import requests
 import bs4
 from dotenv import load_dotenv
 from googlenewsdecoder import gnewsdecoder
+<<<<<<<< HEAD:ai/pipeline/0923_test2.py
+
+# Windows 콘솔 인코딩 대응 (한글 및 특수문자 깨짐 방지)
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+# LangChain 버전 관련 경고 억제
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+from langchain_community.llms import Ollama
+from langchain_core.prompts import PromptTemplate
+
+# 유연한 임포트 (ai.pipeline, 로컬 폴더, ai 디렉토리, backend/app 모두 지원)
+try:
+    from ai.pipeline.bokjiro_client import BokjiroClient
+    from ai.pipeline.youthcenter_client import YouthCenterClient
+except ImportError:
+    try:
+        from bokjiro_client import BokjiroClient
+        from youthcenter_client import YouthCenterClient
+    except ImportError:
+        try:
+            from ai.bokjiro_client import BokjiroClient
+            from ai.youthcenter_client import YouthCenterClient
+        except ImportError:
+            from backend.app.bokjiro_client import BokjiroClient
+            from backend.app.youthcenter_client import YouthCenterClient
+
+========
 
 # Windows 콘솔 인코딩 대응 (한글 및 특수문자 깨짐 방지)
 if sys.platform == "win32":
@@ -48,6 +81,7 @@ try:
 except ImportError:
     from ai.bokjiro_client import BokjiroClient
     from ai.youthcenter_client import YouthCenterClient
+>>>>>>>> 9a50851a69098e771e9be859d091e9fe5c6d8a9c:ai/0923_test2.py
 
 
 # ==============================================================================
