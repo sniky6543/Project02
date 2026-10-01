@@ -4,13 +4,20 @@ import { PolicyItem, PolicyCategory } from '../types/policy';
 import { usePersonalizedPolicies } from '../utils/policyMatcher';
 
 interface ExploreViewProps {
-  onNavigate?: (path: string, policyId?: string) => void;
+  onNavigate?: (path: string, policyId?: string, extraParams?: any) => void;
+  initialParams?: {
+    category?: string;
+    keyword?: string;
+    employment?: string;
+    region?: string;
+    [key: string]: any;
+  } | null;
 }
 
 type SortOption = 'matchScore' | 'deadline' | 'latest' | 'popular';
 
-export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
-  const [isFilterOpen, setIsFilterOpen] = useState(false);
+export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate, initialParams }) => {
+  const [isFilterOpen, setIsFilterOpen] = useState<boolean>(() => Boolean(initialParams && initialParams.category && initialParams.category !== '전체'));
 
   // DB 데이터 및 서버 사이드 페이지네이션 상태
   const [rawPolicies, setRawPolicies] = useState<PolicyItem[]>([]);
@@ -28,13 +35,13 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
     '참여·기반': 0,
   });
 
-  // 검색 & 필터 상태
-  const [searchTerm, setSearchTerm] = useState<string>('');
-  const [activeSearch, setActiveSearch] = useState<string>('');
-  const [selectedCategory, setSelectedCategory] = useState<string>('전체');
-  const [selectedRegion, setSelectedRegion] = useState<string>('');
+  // 검색 & 필터 상태 (initialParams 반영)
+  const [searchTerm, setSearchTerm] = useState<string>(() => initialParams?.keyword || '');
+  const [activeSearch, setActiveSearch] = useState<string>(() => initialParams?.keyword || '');
+  const [selectedCategory, setSelectedCategory] = useState<string>(() => initialParams?.category || '전체');
+  const [selectedRegion, setSelectedRegion] = useState<string>(() => initialParams?.region || '');
   const [ageInput, setAgeInput] = useState<string>('');
-  const [selectedEmployment, setSelectedEmployment] = useState<string>('제한없음');
+  const [selectedEmployment, setSelectedEmployment] = useState<string>(() => initialParams?.employment || '제한없음');
   const [selectedSpecial, setSelectedSpecial] = useState<string>('제한없음');
   const [sortBy, setSortBy] = useState<SortOption>('latest');
 
@@ -44,6 +51,26 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
   // 페이지네이션
   const [currentPage, setCurrentPage] = useState<number>(1);
   const pageSize = 10;
+
+  // initialParams prop이 변경될 때 상태 동기화
+  useEffect(() => {
+    if (initialParams) {
+      if (initialParams.category !== undefined) {
+        setSelectedCategory(initialParams.category);
+      }
+      if (initialParams.keyword !== undefined) {
+        setSearchTerm(initialParams.keyword);
+        setActiveSearch(initialParams.keyword);
+      }
+      if (initialParams.employment !== undefined) {
+        setSelectedEmployment(initialParams.employment);
+      }
+      if (initialParams.region !== undefined) {
+        setSelectedRegion(initialParams.region);
+      }
+      setCurrentPage(1);
+    }
+  }, [initialParams]);
 
   // 1. 카테고리별 전체 카운트 로드 (마운트 시 1회)
   useEffect(() => {
@@ -184,16 +211,40 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span>
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-teal-500"></span>
                   </span>
-                  <span>Supabase 실시간 서버 사이드 페이지네이션 시스템</span>
+                  <span>
+                    {selectedCategory !== '전체'
+                      ? `Supabase [${selectedCategory}] 분야 실시간 정책 필터링`
+                      : 'Supabase 전체 실시간 정책 탐색 시스템'}
+                  </span>
                 </div>
                 <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight leading-snug">
-                  나에게 꼭 맞는 청년 정책 탐색{' '}
-                  <span className="text-sky-600 underline decoration-sky-300 decoration-wavy underline-offset-4">
-                    {loading ? '조회중...' : `총 ${totalCount.toLocaleString()}건`}
-                  </span>
+                  {selectedCategory !== '전체' ? (
+                    <>
+                      <span className="text-sky-600">[{selectedCategory}]</span> 분야 청년 정책{' '}
+                      <span className="text-sky-600 underline decoration-sky-300 decoration-wavy underline-offset-4">
+                        {loading ? '조회중...' : `${totalCount.toLocaleString()}건`}
+                      </span>
+                    </>
+                  ) : activeSearch.trim() ? (
+                    <>
+                      <span className="text-sky-600">"{activeSearch.trim()}"</span> 검색 결과{' '}
+                      <span className="text-sky-600 underline decoration-sky-300 decoration-wavy underline-offset-4">
+                        {loading ? '조회중...' : `${totalCount.toLocaleString()}건`}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      나에게 꼭 맞는 청년 정책 탐색{' '}
+                      <span className="text-sky-600 underline decoration-sky-300 decoration-wavy underline-offset-4">
+                        {loading ? '조회중...' : `총 ${totalCount.toLocaleString()}건`}
+                      </span>
+                    </>
+                  )}
                 </h1>
                 <p className="text-slate-600 text-sm md:text-base leading-relaxed">
-                  온통청년 및 공공데이터포털 복지로 API에서 동기화된 전체 {categoryCounts['전체'] > 0 ? categoryCounts['전체'].toLocaleString() : totalCount.toLocaleString()}건의 실시간 정책을 검색·페이지네이션으로 빠르게 탐색합니다.
+                  {selectedCategory !== '전체'
+                    ? `온통청년 및 공공데이터포털 복지로 API에서 동기화된 [${selectedCategory}] 분야의 실시간 정책 ${totalCount.toLocaleString()}건을 검색·필터링하여 보여줍니다.`
+                    : `온통청년 및 공공데이터포털 복지로 API에서 동기화된 총 ${totalCount.toLocaleString()}건의 실시간 정책을 검색·페이지네이션으로 빠르게 탐색합니다.`}
                 </p>
               </div>
 

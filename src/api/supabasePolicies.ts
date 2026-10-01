@@ -157,9 +157,22 @@ export async function getPaginatedPolicies(
     try {
       let query = supabase.from(table).select('*', { count: 'exact' });
 
-      // 카테고리 필터
+      // 카테고리 유연 매칭 필터
       if (params?.category && params.category !== '전체') {
-        query = query.eq('category', params.category);
+        const cat = params.category;
+        if (cat.includes('일자리') || cat.includes('취업')) {
+          query = query.or('category.ilike.%일자리%,category.ilike.%취업%,category.ilike.%창업%');
+        } else if (cat.includes('주거')) {
+          query = query.ilike('category', '%주거%');
+        } else if (cat.includes('교육') || cat.includes('훈련')) {
+          query = query.or('category.ilike.%교육%,category.ilike.%직업훈련%,category.ilike.%훈련%');
+        } else if (cat.includes('금융') || cat.includes('복지') || cat.includes('문화')) {
+          query = query.or('category.ilike.%금융%,category.ilike.%복지%,category.ilike.%문화%');
+        } else if (cat.includes('참여') || cat.includes('기반')) {
+          query = query.or('category.ilike.%참여%,category.ilike.%기반%');
+        } else {
+          query = query.ilike('category', `%${cat}%`);
+        }
       }
 
       // 키워드 검색
@@ -289,22 +302,30 @@ export async function getCategoryCounts(): Promise<Record<string, number>> {
   const tables = ['policies', 'unified_policies'];
   for (const table of tables) {
     try {
-      const categories = ['일자리', '주거', '교육·직업훈련', '금융·복지·문화', '참여·기반'];
       const totalPromise = supabase.from(table).select('*', { count: 'exact', head: true });
-      const categoryPromises = categories.map((cat) =>
-        supabase.from(table).select('*', { count: 'exact', head: true }).eq('category', cat)
-      );
+      const jobPromise = supabase.from(table).select('*', { count: 'exact', head: true }).or('category.ilike.%일자리%,category.ilike.%취업%,category.ilike.%창업%');
+      const housingPromise = supabase.from(table).select('*', { count: 'exact', head: true }).ilike('category', '%주거%');
+      const eduPromise = supabase.from(table).select('*', { count: 'exact', head: true }).or('category.ilike.%교육%,category.ilike.%직업훈련%,category.ilike.%훈련%');
+      const financePromise = supabase.from(table).select('*', { count: 'exact', head: true }).or('category.ilike.%금융%,category.ilike.%복지%,category.ilike.%문화%');
+      const partPromise = supabase.from(table).select('*', { count: 'exact', head: true }).or('category.ilike.%참여%,category.ilike.%기반%');
 
-      const [totalRes, ...catResults] = await Promise.all([totalPromise, ...categoryPromises]);
+      const [totalRes, jobRes, housingRes, eduRes, financeRes, partRes] = await Promise.all([
+        totalPromise,
+        jobPromise,
+        housingPromise,
+        eduPromise,
+        financePromise,
+        partPromise,
+      ]);
 
       if (totalRes.count !== null && totalRes.count > 0) {
         const result: Record<string, number> = {
           전체: totalRes.count,
-          일자리: catResults[0].count || 0,
-          주거: catResults[1].count || 0,
-          '교육·직업훈련': catResults[2].count || 0,
-          '금융·복지·문화': catResults[3].count || 0,
-          '참여·기반': catResults[4].count || 0,
+          일자리: jobRes.count || 0,
+          주거: housingRes.count || 0,
+          '교육·직업훈련': eduRes.count || 0,
+          '금융·복지·문화': financeRes.count || 0,
+          '참여·기반': partRes.count || 0,
         };
         return result;
       }
