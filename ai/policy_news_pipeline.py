@@ -113,6 +113,20 @@ POLICY_GROUNDED_NEWS_PROMPT = """
 [3줄 요약]:
 """
 
+NEWS_KEYWORDS_PROMPT = """
+당신은 대한민국 청년정책 및 경제/시사 뉴스 전문 AI 분석관입니다.
+제시된 청년 정책명('{policy_name}')과 뉴스 기사를 면밀히 분석하여, 독자가 뉴스의 핵심 맥락을 빠르게 파악할 수 있는
+핵심 키워드를 반드시 5개 이상 (5~8개) 추출하세요.
+영어나 설명 없이 오직 JSON 배열 형식(예: ["청년도약계좌", "정부기여금", "비과세혜택", "자산형성", "금리우대"])으로만 응답하세요.
+
+[제시된 정책명]: {policy_name}
+[기사 제목]: {title}
+[실제 뉴스 기사 본문]:
+{content}
+
+[핵심 키워드 (5개 이상, JSON 배열)]:
+"""
+
 
 # ==============================================================================
 # 2. 정식 LLM 요약 엔진 (Ollama / OpenAI / Heuristic Fallback)
@@ -125,7 +139,41 @@ class LLMSummarizer:
         self.llm = self._initialize_llm()
 
     def _initialize_llm(self):
-        # 1. 로컬 Ollama 확인 (최신 langchain_ollama 우선 사용)
+        # 1. OpenRouter (기본 메인 엔진: nvidia/nemotron-3-ultra-550b-a55b:free)
+        openrouter_key = os.getenv("OPENROUTER_API_KEY", "").strip().strip('"').strip("'")
+        if openrouter_key.startswith("esk-or-v1-"):
+            openrouter_key = openrouter_key[1:]
+        openrouter_model = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
+        if openrouter_key and openrouter_key.startswith("sk-or-v1-") and "your-openrouter" not in openrouter_key:
+            try:
+                from langchain_openai import ChatOpenAI
+                self.engine_type = f"OpenRouter ({openrouter_model})"
+                logger.info(f"AI 엔진: {self.engine_type} 연결 완료")
+                return ChatOpenAI(
+                    model=openrouter_model,
+                    temperature=0,
+                    api_key=openrouter_key,
+                    base_url="https://openrouter.ai/api/v1",
+                    default_headers={
+                        "HTTP-Referer": "https://github.com/youth-compass",
+                        "X-Title": "Youth Compass Policy News"
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"OpenRouter 연결 초기화 예외: {e}")
+
+        # 2. OpenAI API 키 확인
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if openai_key and not openai_key.startswith("sk-proj-your"):
+            try:
+                from langchain_openai import ChatOpenAI
+                self.engine_type = "OpenAI (gpt-4o-mini)"
+                logger.info(f"AI 엔진: {self.engine_type} 연결 완료")
+                return ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=openai_key)
+            except Exception:
+                pass
+
+        # 3. 로컬 Ollama 확인
         try:
             res = requests.get("http://localhost:11434", timeout=1.0)
             if res.status_code == 200:
@@ -142,18 +190,7 @@ class LLMSummarizer:
         except Exception:
             pass
 
-        # 2. OpenAI API 키 확인
-        openai_key = os.getenv("OPENAI_API_KEY")
-        if openai_key:
-            try:
-                from langchain_openai import ChatOpenAI
-                self.engine_type = "OpenAI (gpt-4o-mini)"
-                logger.info(f"AI 엔진: {self.engine_type} 연결 완료")
-                return ChatOpenAI(model="gpt-4o-mini", temperature=0, api_key=openai_key)
-            except Exception:
-                pass
-
-        # 3. 내장 스마트 규칙 기반 엔진
+        # 4. 내장 스마트 규칙 기반 엔진
         self.engine_type = "Smart-Rule-AI"
         logger.info(f"AI 엔진: {self.engine_type} 활성화 (오프라인 모드)")
         return None
@@ -165,7 +202,7 @@ class LLMSummarizer:
                 from langchain_core.prompts import PromptTemplate
                 prompt = PromptTemplate(input_variables=["content"], template=POLICY_SUMMARY_PROMPT)
                 res = self.llm.invoke(prompt.format(content=raw_content))
-                clean = str(res).strip()
+                clean = str(res.content if hasattr(res, 'content') else res).strip()
                 if self._is_valid_3lines(clean):
                     return clean
             except Exception as e:
@@ -181,7 +218,7 @@ class LLMSummarizer:
                 from langchain_core.prompts import PromptTemplate
                 prompt = PromptTemplate(input_variables=["policy_name", "content"], template=POLICY_GROUNDED_NEWS_PROMPT)
                 res = self.llm.invoke(prompt.format(policy_name=policy_name, content=news_content))
-                clean = str(res).strip()
+                clean = str(res.content if hasattr(res, 'content') else res).strip()
                 if self._is_valid_3lines(clean):
                     return clean
             except Exception as e:
@@ -189,6 +226,38 @@ class LLMSummarizer:
 
         # Fallback 규칙 기반 뉴스 요약
         return self._fallback_grounded_news_3lines(policy_name, news_content)
+
+    def extract_news_keywords(self, policy_name: str, news_title: str, news_content: str, min_count: int = 5) -> List[str]:
+        """
+        뉴스 요약 시 뉴스에 대한 핵심 키워드 5개 이상(5~8개)을 추출
+        OpenRouter nvidia/nemotron-3-ultra-550b-a55b:free 모델 우선 사용
+        """
+        if self.llm:
+            try:
+                from langchain_core.prompts import PromptTemplate
+                prompt = PromptTemplate(input_variables=["policy_name", "title", "content"], template=NEWS_KEYWORDS_PROMPT)
+                res = self.llm.invoke(prompt.format(policy_name=policy_name, title=news_title, content=news_content[:1500]))
+                text = str(res.content if hasattr(res, 'content') else res).strip()
+                match = re.search(r"\[[\s\S]*?\]", text)
+                if match:
+                    parsed = json.loads(match.group(0))
+                    if isinstance(parsed, list) and len(parsed) >= 1:
+                        clean_kws = [str(k).strip().replace("#", "") for k in parsed if str(k).strip()]
+                        if len(clean_kws) >= min_count:
+                            return clean_kws[:8]
+                        elif len(clean_kws) > 0:
+                            extra = self._fallback_extract_news_keywords(policy_name, news_title, news_content, min_count=min_count)
+                            for ek in extra:
+                                if ek not in clean_kws:
+                                    clean_kws.append(ek)
+                                if len(clean_kws) >= min_count:
+                                    break
+                            return clean_kws[:8]
+            except Exception as e:
+                logger.warning(f"LLM 뉴스 키워드 추출 실패, 스마트 룰로 전환: {e}")
+
+        # Fallback 룰 기반 추출
+        return self._fallback_extract_news_keywords(policy_name, news_title, news_content, min_count=min_count)
 
     def _is_valid_3lines(self, text: str) -> bool:
         lines = [l for l in text.split("\n") if l.strip()]
@@ -225,6 +294,48 @@ class LLMSummarizer:
         s2 = prioritized[1] if len(prioritized) > 1 else "청년층 지원 확대 및 실질적인 복지 혜택 개편 방안이 집중 보도되었습니다."
         s3 = prioritized[2] if len(prioritized) > 2 else "세부 지원 일정 및 자격 요건은 정부 및 주관기관의 최신 공고를 확인해야 합니다."
         return f"[1] {s1[:120]}\n[2] {s2[:120]}\n[3] {s3[:120]}"
+
+    def _fallback_extract_news_keywords(self, policy_name: str, title: str, content: str, min_count: int = 5) -> List[str]:
+        """지능형 룰 기반 뉴스 키워드 5개 이상 추출"""
+        candidates = []
+        combined = f"{policy_name} {title} {content}".lower()
+
+        # 도메인 주요 키워드 매칭
+        keyword_pool = [
+            ("도약계좌", "청년도약계좌"), ("기여금", "정부기여금"), ("비과세", "비과세혜택"), ("자산", "자산형성"),
+            ("월세", "청년월세지원"), ("보증금", "보증금대출"), ("주거", "주거안정"), ("공공임대", "공공임대주택"),
+            ("구직", "구직활동지원"), ("취업", "청년취업지원"), ("인턴", "일경험인턴십"), ("창업", "청년창업육성"),
+            ("교통비", "K-패스교통비"), ("학자금", "학자금대출이자"), ("역량", "직무역량강화"), ("마음건강", "청년마음건강"),
+            ("소득기준", "중위소득요건"), ("신청기간", "모집접수일정"), ("선발인원", "지원선발기준"), ("금리우대", "우대금리적용")
+        ]
+
+        if policy_name:
+            clean_pol = re.sub(r"\[.*?\]|\(.*?\)", "", policy_name).strip()
+            if clean_pol and clean_pol not in candidates:
+                candidates.append(clean_pol)
+
+        for trigger, kw in keyword_pool:
+            if trigger in combined and kw not in candidates:
+                candidates.append(kw)
+                if len(candidates) >= min_count + 2:
+                    return candidates[:min_count + 2]
+
+        nouns = [w for w in re.sub(r"[^\w\s]", " ", f"{title} {content[:300]}").split() if len(w) >= 2 and w not in ["청년", "지원", "사업", "안내", "뉴스", "기자", "보도", "지난", "이번", "따라", "관련", "위해"]]
+        for n in nouns:
+            if n not in candidates:
+                candidates.append(n)
+                if len(candidates) >= min_count + 2:
+                    return candidates[:min_count + 2]
+
+        defaults = ["청년정책동향", "맞춤수혜혜택", "정부지원사업", "온라인신청", "생활안정지원"]
+        for df in defaults:
+            if df not in candidates:
+                candidates.append(df)
+            if len(candidates) >= min_count:
+                break
+
+        return candidates[:max(min_count, len(candidates))]
+
 
 
 # ==============================================================================
@@ -489,8 +600,20 @@ class PolicyNewsService:
         # 4. 정책에 근거한 실제 뉴스 3줄 요약 생성
         news_3lines = self.summarizer.summarize_grounded_news(policy_name, news_data["content"])
 
-        # 5. 정책 밑에 실제 뉴스 3줄 요약이 결합된 통합 구조체 생성
+        # 5. 뉴스에 대한 핵심 키워드 5개 이상(5~8개) 추출
+        news_keywords = self.summarizer.extract_news_keywords(
+            policy_name=policy_name,
+            news_title=news_data["title"],
+            news_content=news_data["content"],
+            min_count=5
+        )
+        news_keywords_str = ", ".join(news_keywords)
+        news_data["keywords"] = news_keywords
+        news_data["keywords_str"] = news_keywords_str
+
+        # 6. 정책 밑에 실제 뉴스 3줄 요약 및 키워드가 결합된 통합 구조체 생성
         matched_kw = news_data.get("keyword", policy_name)
+        kw_badges = " ".join([f"#{k}" for k in news_keywords])
         integrated_display = f"""
 ================================================================================
 📋 [청년 정책 정보]: {policy_name}
@@ -509,7 +632,8 @@ class PolicyNewsService:
 - 언론사/출처: {news_data['publisher']}
 - 원문 링크: {news_data['url']}
 - 보도 일시: {news_data.get('published_at', '최근')}
-- 🎯 정책 직결 키워드: [{matched_kw}]
+- 🎯 정책 직결 식별자: [{matched_kw}]
+- 🏷️ AI 뉴스 핵심 키워드 (5개 이상): {kw_badges}
 
 🔍 [AI 뉴스 3줄 요약]:
 {news_3lines}
@@ -526,11 +650,57 @@ class PolicyNewsService:
                 "publisher": news_data["publisher"],
                 "url": news_data["url"],
                 "published_at": news_data.get("published_at"),
-                "summary_3lines": news_3lines
+                "summary_3lines": news_3lines,
+                "keywords": news_keywords,
+                "keywords_str": news_keywords_str
             },
+            "news_keywords": news_keywords,
             "integrated_text": integrated_display.strip(),
             "created_at": datetime.now().isoformat()
         }
+
+    def save_to_db(self, result: Dict[str, Any], table_name: str = "policy_news") -> Dict[str, Any]:
+        """Supabase 또는 SQLite 데이터베이스에 뉴스 및 5개 이상 키워드 영구 적재"""
+        supabase_url = os.getenv("SUPABASE_URL", "")
+        supabase_key = os.getenv("SUPABASE_KEY", "")
+
+        grounded = result.get("grounded_news", {})
+        keywords_str = grounded.get("keywords_str") or ", ".join(grounded.get("keywords", []))
+        
+        record = {
+            "id": f"NEWS_{result.get('policy_id', 'POL')}_{int(datetime.now().timestamp())}",
+            "policy_id": result.get("policy_id"),
+            "policy_name": result.get("policy_name", ""),
+            "title": grounded.get("title", ""),
+            "publisher": grounded.get("publisher", ""),
+            "url": grounded.get("url", ""),
+            "published_at": str(grounded.get("published_at", "")),
+            "summary_3lines": grounded.get("summary_3lines", ""),
+            "keywords": keywords_str,
+            "updated_at": datetime.now().isoformat()
+        }
+
+        # Supabase API 저장 시도
+        if supabase_url and supabase_key and "your-project" not in supabase_url:
+            try:
+                endpoint = f"{supabase_url.rstrip('/')}/rest/v1/{table_name}"
+                headers = {
+                    "apikey": supabase_key,
+                    "Authorization": f"Bearer {supabase_key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "resolution=merge-duplicates,return=representation"
+                }
+                res = requests.post(endpoint, headers=headers, json=[record], timeout=10)
+                if res.status_code in [200, 201]:
+                    logger.info(f"✅ Supabase '{table_name}' 테이블에 뉴스 및 5개 이상 키워드 저장 성공! (키워드: {keywords_str})")
+                    return {"success": True, "provider": "Supabase", "record": record}
+            except Exception as e:
+                logger.warning(f"Supabase 뉴스 저장 실패 (로컬 JSON 폴백): {e}")
+
+        # JSON 영구 파일 적재
+        self.save_to_json(result)
+        return {"success": True, "provider": "JSON", "record": record}
+
 
     def save_to_json(self, result: Dict[str, Any], filepath: Optional[str] = None):
         """결과를 JSON 파일에 누적 저장"""
@@ -580,7 +750,7 @@ def main():
                 result = service.process_policy(user_input)
                 print(result["integrated_text"])
                 if args.save:
-                    service.save_to_json(result)
+                    service.save_to_db(result)
             except (KeyboardInterrupt, EOFError):
                 break
         return
@@ -591,7 +761,7 @@ def main():
         result = service.process_policy(args.policy)
         print(result["integrated_text"])
         if args.save:
-            service.save_to_json(result)
+            service.save_to_db(result)
         return
 
     # 3. 기본 실행 (실제 공공 API + 주요 정책 자동 시연 및 검증)
@@ -621,7 +791,7 @@ def main():
         res = service.process_policy(p)
         print(res["integrated_text"])
         if args.save:
-            service.save_to_json(res)
+            service.save_to_db(res)
 
     print("\n" + "=" * 80)
     print("✨ [정식 서비스] 모든 정책에 대한 실제 뉴스 데이터 및 3줄 요약 삽입 처리 완료!")

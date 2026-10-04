@@ -22,6 +22,7 @@ class UnifiedPolicy(Base):
     target_condition = Column(Text, nullable=True)      # 자격 요건
     apply_method = Column(Text, nullable=True)          # 신청 방법 (장문 안내 포함)
     apply_url = Column(Text, nullable=True)             # 신청 페이지 URL
+    keywords = Column(Text, nullable=True)              # 정책 키워드 (3개)
     period_sdate = Column(Text, nullable=True)          # 시작일
     period_edate = Column(Text, nullable=True)          # 종료일
 
@@ -48,4 +49,21 @@ class NotificationLog(Base):
     user_id = Column(String(50), nullable=True)                 # 연계 사용자 ID
     policy_id = Column(String(100), nullable=True)              # 연계 정책 ID
     status = Column(String(20), default="SENT")                 # 발송 상태 (SENT, REGISTERED 등)
+
+
+class PolicyNews(Base):
+    __tablename__ = 'policy_news'
+
+    id = Column(String(100), primary_key=True)                  # 뉴스 ID
+    policy_id = Column(String(100), nullable=True)              # 연계 정책 ID
+    policy_name = Column(String(255), nullable=False)           # 정책명
+    title = Column(String(255), nullable=False)                 # 뉴스 기사 제목
+    publisher = Column(String(100), nullable=True)              # 언론사
+    url = Column(Text, nullable=False)                          # 기사 링크
+    published_at = Column(String(50), nullable=True)            # 보도 일시
+    summary_3lines = Column(Text, nullable=False)               # AI 3줄 요약
+    keywords = Column(Text, nullable=True)                      # 뉴스 핵심 키워드 5개 이상 (쉼표 구분)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 

@@ -37,10 +37,9 @@ session = Session()
 Base.metadata.create_all(engine)
 
 candidate_paths = [
-    os.path.join(backend_dir, "[2026.09.22 17시16분].json"),
-    os.path.join(root_dir, "db", "[2026.09.22 17시16분].json"),
-    os.path.join(backend_dir, "db", "[2026.09.22 17시16분].json"),
-    "[2026.09.22 17시16분].json",
+    os.path.join(root_dir, "db", "policy_news_integrated.json"),
+    os.path.join(root_dir, "ai", "summarized_policies.json"),
+    os.path.join(root_dir, "db", "seeds", "mock_policies.json"),
 ]
 
 json_file_path = None
@@ -50,7 +49,7 @@ for path in candidate_paths:
         break
 
 if not json_file_path:
-    print("❌ '[2026.09.22 17시16분].json' 파일을 찾을 수 없습니다.")
+    print("❌ 삽입할 정책 JSON 파일(policy_news_integrated.json / summarized_policies.json)을 찾을 수 없습니다.")
     sys.exit(1)
 
 with open(json_file_path, 'r', encoding='utf-8') as file:

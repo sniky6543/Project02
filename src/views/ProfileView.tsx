@@ -45,9 +45,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
   const [householdType, setHouseholdType] = useState<string>(initialData.householdType || '');
   const [regionCity, setRegionCity] = useState<string>(initialData.regionCity || '서울특별시');
   const [regionDistrict, setRegionDistrict] = useState<string>(initialData.regionDistrict || '마포구 (서교동/상수동)');
-  const [aiProvider, setAiProvider] = useState<'OPENAI' | 'OLLAMA' | 'Router API'>(initialData.aiProvider || 'OPENAI');
-  const [apiKeys, setApiKeys] = useState<{ [key: string]: string }>(initialData.apiKeys || { OPENAI: '', OLLAMA: '', 'Router API': '' });
-  const [showKey, setShowKey] = useState<boolean>(false);
 
   // SECTION 02: 학력 및 취업 · 구직 상태
   const [employmentStatus, setEmploymentStatus] = useState<string>(initialData.employmentStatus || '');
@@ -164,11 +161,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
     householdType,
     regionCity,
     regionDistrict,
-    aiProvider,
+    aiProvider: 'Router API',
     apiKeys: {
-      OPENAI: apiKeys.OPENAI || '',
-      OLLAMA: apiKeys.OLLAMA || '',
-      'Router API': apiKeys['Router API'] || '',
+      OPENAI: '',
+      OLLAMA: '',
+      'Router API': '',
     },
     employmentStatus,
     education,
@@ -183,7 +180,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
     isEmailSelected,
     emailAddress,
   }), [
-    nickname, birthDate, householdType, regionCity, regionDistrict, aiProvider, apiKeys,
+    nickname, birthDate, householdType, regionCity, regionDistrict,
     employmentStatus, education, targetJob, housingType, annualIncome, interests,
     notifyNewPolicy, notifyDeadline, isTelegramSelected, telegramId, isEmailSelected, emailAddress
   ]);
@@ -295,8 +292,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
       setHouseholdType(EMPTY_PROFILE_SETTINGS.householdType);
       setRegionCity(EMPTY_PROFILE_SETTINGS.regionCity);
       setRegionDistrict(EMPTY_PROFILE_SETTINGS.regionDistrict);
-      setAiProvider(EMPTY_PROFILE_SETTINGS.aiProvider);
-      setApiKeys(EMPTY_PROFILE_SETTINGS.apiKeys);
       setEmploymentStatus(EMPTY_PROFILE_SETTINGS.employmentStatus);
       setEducation(EMPTY_PROFILE_SETTINGS.education);
       setTargetJob(EMPTY_PROFILE_SETTINGS.targetJob);
@@ -320,8 +315,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
     setHouseholdType(DEMO_PROFILE_SETTINGS.householdType);
     setRegionCity(DEMO_PROFILE_SETTINGS.regionCity);
     setRegionDistrict(DEMO_PROFILE_SETTINGS.regionDistrict);
-    setAiProvider(DEMO_PROFILE_SETTINGS.aiProvider);
-    setApiKeys(DEMO_PROFILE_SETTINGS.apiKeys);
     setEmploymentStatus(DEMO_PROFILE_SETTINGS.employmentStatus);
     setEducation(DEMO_PROFILE_SETTINGS.education);
     setTargetJob(DEMO_PROFILE_SETTINGS.targetJob);
@@ -354,7 +347,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
   }, [onNavigate]);
 
   return (
-    <main className="flex-1 w-full pt-20 pb-16 bg-[#f8fafc] max-w-[1240px] mx-auto px-4 md:px-8">
+    <main className="flex-1 w-full pt-16 sm:pt-20 pb-24 lg:pb-16 bg-[#f8fafc] max-w-[1240px] mx-auto px-3.5 sm:px-6 md:px-8">
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-20 right-6 z-50 bg-slate-900 text-white text-xs font-semibold px-4 py-3 rounded-2xl shadow-2xl border border-sky-400/40 flex items-center gap-2.5 animate-bounce">
@@ -363,12 +356,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
         </div>
       )}
 
-      <div className="flex flex-col w-full space-y-8">
+      <div className="flex flex-col w-full space-y-6 sm:space-y-8">
         {/* Top Banner: Matches SCREEN_4 Airy Pastel Sky-Mint-Indigo Gradient */}
-        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-sky-100/70 via-indigo-50/50 to-teal-50/70 p-6 md:p-8 border border-sky-200/60 shadow-sm shadow-sky-100/50">
+        <div className="relative overflow-hidden rounded-2xl sm:rounded-3xl bg-gradient-to-r from-sky-100/70 via-indigo-50/50 to-teal-50/70 p-4 sm:p-6 md:p-8 border border-sky-200/60 shadow-sm shadow-sky-100/50">
           <div className="absolute -right-8 -top-10 w-72 h-72 rounded-full bg-teal-200/30 blur-3xl pointer-events-none"></div>
           <div className="absolute left-1/3 -bottom-10 w-64 h-64 rounded-full bg-sky-200/40 blur-3xl pointer-events-none"></div>
-          <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-5 sm:gap-6">
             <div className="space-y-2.5 max-w-2xl">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/80 border border-sky-200/70 shadow-xs text-sky-800 text-xs font-semibold backdrop-blur-md" style={{ whiteSpace: 'nowrap', wordBreak: 'keep-all' }}>
                 <span className="flex h-2 w-2 relative">
@@ -568,83 +561,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                   <div className="flex items-center gap-1.5 text-sky-700 pt-1 text-xs">
                     <svg className="w-4 h-4 text-sky-500 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="16" y2="12"></line><line x1="12" x2="12.01" y1="8" y2="8"></line></svg>
                     <span><strong>{regionCity} {regionDistrict}</strong> 맞춤 청년 정책 및 전국 공통 혜택이 적용됩니다.</span>
-                  </div>
-                </div>
-
-                {/* AI API 키 설정 (라디오 버튼 + API 키 입력란) */}
-                <div className="space-y-3 pt-3 border-t border-slate-100">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="material-symbols-outlined text-sky-600 text-[18px]">psychology</span>
-                      <label className="text-xs font-bold text-slate-700">AI 맞춤 추천 &amp; 요약 API 키 설정</label>
-                    </div>
-                    <span className="text-[11px] text-slate-400">개인 API 키로 맞춤 정책 분석 속도 향상</span>
-                  </div>
-
-                  {/* 라디오 버튼 선택 (OPENAI, OLLAMA, Router API) */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                    {(['OPENAI', 'OLLAMA', 'Router API'] as const).map((provider) => (
-                      <label
-                        key={provider}
-                        className={`flex items-center gap-2.5 p-3 rounded-xl border cursor-pointer select-none transition-all ${aiProvider === provider
-                            ? 'bg-sky-50/70 border-sky-300 text-sky-900 shadow-xs ring-1 ring-sky-200'
-                            : 'bg-slate-50/70 border-slate-200 text-slate-600 hover:bg-slate-100/60'
-                          }`}
-                      >
-                        <input
-                          type="radio"
-                          name="aiProvider"
-                          value={provider}
-                          checked={aiProvider === provider}
-                          onChange={() => setAiProvider(provider)}
-                          className="w-4 h-4 text-sky-600 focus:ring-sky-500 border-slate-300 cursor-pointer"
-                        />
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="text-xs font-bold truncate">{provider}</span>
-                        </div>
-                      </label>
-                    ))}
-                  </div>
-
-                  {/* 선택된 API 키 입력 필드 */}
-                  <div className="space-y-1.5 pt-1">
-                    <div className="flex justify-between items-center">
-                      <label className="text-xs font-bold text-slate-700">
-                        {aiProvider} {aiProvider === 'OLLAMA' ? '엔드포인트 / API Key' : 'API Key'} 입력
-                      </label>
-                      <span className="text-[11px] text-sky-600 font-medium">
-                        {aiProvider === 'OPENAI' && 'OpenAI (GPT-4o/mini) 연동'}
-                        {aiProvider === 'OLLAMA' && '로컬 / 원격 Ollama 서버 연동'}
-                        {aiProvider === 'Router API' && 'OpenRouter 및 다중 LLM 라우팅'}
-                      </span>
-                    </div>
-                    <div className="relative flex items-center">
-                      <input
-                        type={showKey ? 'text' : 'password'}
-                        value={apiKeys[aiProvider] || ''}
-                        onChange={(e) => setApiKeys({ ...apiKeys, [aiProvider]: e.target.value })}
-                        placeholder={
-                          aiProvider === 'OPENAI'
-                            ? 'sk-proj-...'
-                            : aiProvider === 'OLLAMA'
-                              ? 'http://localhost:11434 또는 API Key'
-                              : 'sk-or-v1-...'
-                        }
-                        className="w-full bg-slate-50/80 border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 pr-20 focus:outline-none focus:border-sky-400 focus:bg-white transition-all shadow-xs"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowKey(!showKey)}
-                        className="absolute right-3 px-2 py-1 rounded-md text-xs font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-200/60 transition-colors cursor-pointer"
-                      >
-                        {showKey ? '숨기기' : '표시'}
-                      </button>
-                    </div>
-                    <p className="text-xs text-slate-400">
-                      {aiProvider === 'OPENAI' && 'OpenAI API 대시보드에서 발급받은 Secret Key를 입력해주세요.'}
-                      {aiProvider === 'OLLAMA' && '로컬 PC나 프라이빗 서버에서 실행 중인 Ollama URL 또는 키를 입력해주세요.'}
-                      {aiProvider === 'Router API' && 'OpenRouter 등 라우터 서비스에서 발급받은 통합 API Key를 입력해주세요.'}
-                    </p>
                   </div>
                 </div>
               </div>
@@ -1035,25 +951,27 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                   </label>
                 </div>
 
-                {/* Notification Channels */}
+                {/* Notification Channels (Single Select: Telegram OR Email) */}
                 <div className="pt-4 space-y-3">
-                  <span className="text-xs font-bold text-slate-800">수신 채널 선택</span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800">수신 채널 선택 (1개 선택)</span>
+                    <span className="text-[11px] text-sky-600 font-medium">텔레그램 또는 이메일 중 택 1</span>
+                  </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {/* 텔레그램 알림 채널 */}
-                    <div className={`p-4 rounded-xl border transition-all ${isTelegramSelected ? 'bg-sky-50/30 border-sky-200' : 'bg-slate-50/60 border-slate-200'}`}>
+                    {/* 1. 텔레그램 알림 채널 */}
+                    <div className={`p-4 rounded-xl border transition-all ${isTelegramSelected ? 'bg-sky-50/40 border-sky-300 ring-1 ring-sky-200' : 'bg-slate-50/60 border-slate-200 opacity-80'}`}>
                       <div className="flex items-center justify-between gap-2">
                         <label className="flex items-center gap-3 cursor-pointer select-none">
                           <input
-                            type="checkbox"
+                            type="radio"
+                            name="notificationChannel"
                             checked={isTelegramSelected}
-                            onChange={(e) => {
-                              const checked = e.target.checked;
-                              setIsTelegramSelected(checked);
-                              if (checked) {
-                                setShowTelegramGuide(true);
-                              }
+                            onChange={() => {
+                              setIsTelegramSelected(true);
+                              setIsEmailSelected(false);
+                              setShowTelegramGuide(true);
                             }}
-                            className="w-4 h-4 rounded text-sky-600 focus:ring-sky-500 border-slate-300 cursor-pointer"
+                            className="w-4 h-4 text-sky-600 focus:ring-sky-500 border-slate-300 cursor-pointer"
                           />
                           <div className="flex items-center gap-2">
                             <div className={`w-6 h-6 rounded-full text-white flex items-center justify-center text-xs shadow-xs transition-colors ${isTelegramSelected ? 'bg-[#229ED9]' : 'bg-slate-400'}`}>
@@ -1061,7 +979,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z" />
                               </svg>
                             </div>
-                            <span className={`text-xs font-semibold transition-colors ${isTelegramSelected ? 'text-slate-800' : 'text-slate-500'}`}>텔레그램 알림</span>
+                            <span className={`text-xs font-bold transition-colors ${isTelegramSelected ? 'text-slate-900' : 'text-slate-600'}`}>텔레그램 알림</span>
                           </div>
                         </label>
                         <button
@@ -1104,20 +1022,24 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                       </div>
                     </div>
 
-                    {/* 이메일 알림 채널 */}
-                    <div className={`p-4 rounded-xl border transition-all ${isEmailSelected ? 'bg-sky-50/30 border-sky-200' : 'bg-slate-50/60 border-slate-200'}`}>
+                    {/* 2. 이메일 알림 채널 */}
+                    <div className={`p-4 rounded-xl border transition-all ${isEmailSelected ? 'bg-sky-50/40 border-sky-300 ring-1 ring-sky-200' : 'bg-slate-50/60 border-slate-200 opacity-80'}`}>
                       <label className="flex items-center gap-3 cursor-pointer select-none">
                         <input
-                          type="checkbox"
+                          type="radio"
+                          name="notificationChannel"
                           checked={isEmailSelected}
-                          onChange={(e) => setIsEmailSelected(e.target.checked)}
-                          className="w-4 h-4 rounded text-sky-600 focus:ring-sky-500 border-slate-300 cursor-pointer"
+                          onChange={() => {
+                            setIsEmailSelected(true);
+                            setIsTelegramSelected(false);
+                          }}
+                          className="w-4 h-4 text-sky-600 focus:ring-sky-500 border-slate-300 cursor-pointer"
                         />
                         <div className="flex items-center gap-2">
                           <div className={`w-6 h-6 rounded-full flex items-center justify-center shadow-xs transition-colors ${isEmailSelected ? 'bg-sky-100 text-sky-600' : 'bg-slate-200 text-slate-400'}`}>
                             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
                           </div>
-                          <span className={`text-xs font-semibold transition-colors ${isEmailSelected ? 'text-slate-800' : 'text-slate-500'}`}>이메일 알림</span>
+                          <span className={`text-xs font-bold transition-colors ${isEmailSelected ? 'text-slate-900' : 'text-slate-600'}`}>이메일 알림</span>
                         </div>
                       </label>
                       <div className="mt-3 pt-3 border-t border-slate-200/80 space-y-1.5">
@@ -1134,7 +1056,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                             }`}
                         />
                         <p className={`text-[11px] transition-colors ${isEmailSelected ? 'text-slate-400' : 'text-slate-300'}`}>
-                          신규 맞춤 공고와 마감 임박 알림이 발송됩니다.
+                          신규 맞춤 공고와 마감 임박 알림이 이메일로 발송됩니다.
                         </p>
                       </div>
                     </div>

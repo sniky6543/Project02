@@ -54,7 +54,7 @@ class UserProfileSchema(BaseModel):
 class RecommendationRequest(BaseModel):
     userProfile: UserProfileSchema
     preferredCategory: Optional[List[str]] = Field(default_factory=lambda: ["생활비", "자산형성", "일자리"], description="선호 정책 카테고리")
-    aiModel: Optional[str] = Field("OLLAMA", description="사용할 AI 모델 ('OLLAMA' | 'OPENAI' | 'Router API')")
+    aiModel: Optional[str] = Field("Router API", description="사용할 AI 모델 ('Router API' | 'OPENAI' | 'OLLAMA')")
     limit: Optional[int] = Field(3, ge=1, le=10, description="추천받을 정책 개수")
 
 
@@ -67,7 +67,7 @@ class ChatRequest(BaseModel):
     policyId: Optional[str] = Field(None, description="특정 정책 고유 ID (선택)")
     question: str = Field(..., min_length=2, description="청년 정책 관련 질문 내용")
     chatHistory: Optional[List[ChatMessageSchema]] = Field(default_factory=list, description="이전 대화 내역")
-    aiModel: Optional[str] = Field("OLLAMA", description="사용할 AI 모델")
+    aiModel: Optional[str] = Field("Router API", description="사용할 AI 모델")
 
 
 # ==============================================================================

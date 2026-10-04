@@ -66,10 +66,10 @@ export const KanbanView: React.FC<KanbanViewProps> = ({ onNavigate }) => {
   }, [filteredPolicies]);
 
   return (
-    <main className="flex-1 w-full pt-20 pb-16 bg-[#f8fafc] max-w-[1240px] mx-auto px-4 md:px-8">
-      <div className="flex flex-col w-full gap-8">
+    <main className="flex-1 w-full pt-16 sm:pt-20 pb-24 lg:pb-16 bg-[#f8fafc] max-w-[1240px] mx-auto px-3.5 sm:px-6 md:px-8">
+      <div className="flex flex-col w-full gap-6 sm:gap-8">
         {/* Top Header & View Mode Switcher */}
-        <section className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-sky-100/70 via-indigo-50/50 to-teal-50/70 p-6 md:p-8 border border-sky-200/60 shadow-sm shadow-sky-100/50 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+        <section className="relative overflow-hidden rounded-2xl sm:rounded-3xl bg-gradient-to-r from-sky-100/70 via-indigo-50/50 to-teal-50/70 p-4 sm:p-6 md:p-8 border border-sky-200/60 shadow-sm shadow-sky-100/50 flex flex-col lg:flex-row lg:items-center justify-between gap-5 sm:gap-6">
           <div className="space-y-2 relative z-10 max-w-2xl">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/85 border border-sky-200/70 shadow-xs text-sky-800 text-xs font-semibold backdrop-blur-md">
               <span className="flex h-2 w-2 relative">
