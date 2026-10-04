@@ -96,6 +96,7 @@ for data in policies_data:
         target_condition=data.get("target_condition") or data.get("prtcpntReqstEtcMatterCn") or "",
         apply_method=data.get("apply_method") or data.get("rqutUrldddr") or "",
         apply_url=data.get("apply_url") or data.get("rqutUrldddr") or "",
+        keywords=data.get("keywords_str") or (", ".join(data.get("keywords")) if isinstance(data.get("keywords"), list) else data.get("keywords", "")),
         period_sdate=data.get("period_sdate") or data.get("apply_period") or data.get("rqutPrdCn") or "",
         period_edate=data.get("period_edate") or data.get("business_period") or data.get("bizPrdCn") or ""
     )

@@ -226,11 +226,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ onNavigate }) => {
   };
 
   return (
-    <main className="flex-1 w-full pt-20 pb-16 bg-[#f8fafc] max-w-[1240px] mx-auto px-4 md:px-8">
+    <main className="flex-1 w-full pt-16 sm:pt-20 pb-24 lg:pb-16 bg-[#f8fafc] max-w-[1240px] mx-auto px-3.5 sm:px-6 md:px-8">
       <div className="flex flex-col w-full space-y-6">
         
-        {/* Top Title Hero Banner (월별캘린더/칸반 스위치 및 일정추가 버튼 삭제됨) */}
-        <section className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-sky-100/70 via-indigo-50/50 to-teal-50/70 p-6 md:p-8 border border-sky-200/60 shadow-sm shadow-sky-100/50 flex flex-col justify-between gap-4">
+        {/* Top Title Hero Banner */}
+        <section className="relative overflow-hidden rounded-2xl sm:rounded-3xl bg-gradient-to-r from-sky-100/70 via-indigo-50/50 to-teal-50/70 p-4 sm:p-6 md:p-8 border border-sky-200/60 shadow-sm shadow-sky-100/50 flex flex-col justify-between gap-4">
           <div className="absolute -right-8 -top-10 w-72 h-72 rounded-full bg-teal-200/30 blur-3xl pointer-events-none"></div>
           <div className="absolute left-1/3 -bottom-10 w-64 h-64 rounded-full bg-sky-200/40 blur-3xl pointer-events-none"></div>
           
@@ -355,7 +355,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ onNavigate }) => {
                 </div>
 
                 {/* Calendar Cells Grid */}
-                <div className="grid grid-cols-7 gap-1.5 pt-1 min-h-[480px]">
+                <div className="grid grid-cols-7 gap-1 sm:gap-1.5 pt-1 min-h-[380px] sm:min-h-[480px]">
                   {calendarGrid.map((cell) => {
                     const isSelected = cell.type === 'current' && cell.day === selectedDay;
                     const hasItems = cell.items.length > 0;
@@ -364,9 +364,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ onNavigate }) => {
                       return (
                         <div
                           key={cell.dateKey}
-                          className="min-h-[96px] p-2 rounded-2xl bg-slate-50/30 opacity-30 flex flex-col gap-1 border border-transparent select-none"
+                          className="min-h-[58px] sm:min-h-[80px] md:min-h-[96px] p-1 sm:p-2 rounded-xl sm:rounded-2xl bg-slate-50/30 opacity-30 flex flex-col gap-1 border border-transparent select-none"
                         >
-                          <span className="text-xs font-semibold text-slate-400">{cell.day}</span>
+                          <span className="text-[10px] sm:text-xs font-semibold text-slate-400">{cell.day}</span>
                         </div>
                       );
                     }
@@ -375,9 +375,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ onNavigate }) => {
                       <div
                         key={cell.dateKey}
                         onClick={() => setSelectedDay(cell.day)}
-                        className={`min-h-[96px] p-2 rounded-2xl transition-all flex flex-col gap-1 cursor-pointer border ${
+                        className={`min-h-[58px] sm:min-h-[80px] md:min-h-[96px] p-1 sm:p-2 rounded-xl sm:rounded-2xl transition-all flex flex-col gap-1 cursor-pointer border ${
                           cell.isToday
-                            ? 'bg-sky-50/80 border-sky-400 shadow-xs ring-2 ring-sky-200/50'
+                            ? 'bg-sky-50/80 border-sky-400 shadow-xs ring-1 sm:ring-2 ring-sky-200/50'
                             : isSelected
                             ? 'bg-white border-sky-300 shadow-xs ring-1 ring-sky-200'
                             : 'bg-white border-slate-100 hover:border-sky-200 hover:shadow-xs'
@@ -385,7 +385,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ onNavigate }) => {
                       >
                         <div className="flex items-center justify-between">
                           <span
-                            className={`text-xs font-bold ${
+                            className={`text-[11px] sm:text-xs font-bold ${
                               cell.isToday
                                 ? 'text-sky-700 font-extrabold'
                                 : 'text-slate-700'
@@ -394,7 +394,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ onNavigate }) => {
                             {cell.day}
                           </span>
                           {cell.isToday && (
-                            <span className="text-[10px] bg-sky-500 text-white px-1.5 py-0.2 rounded-full font-bold">
+                            <span className="text-[9px] sm:text-[10px] bg-sky-500 text-white px-1 sm:px-1.5 py-0.2 rounded-full font-bold">
                               오늘
                             </span>
                           )}
@@ -410,7 +410,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ onNavigate }) => {
                                   e.stopPropagation();
                                   onNavigate?.('detail', p.id);
                                 }}
-                                className="bg-rose-50 hover:bg-rose-100/80 border border-rose-200/80 px-1.5 py-1 rounded-lg text-[10px] font-bold text-rose-700 truncate flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+                                className="bg-rose-50 hover:bg-rose-100/80 border border-rose-200/80 px-1 sm:px-1.5 py-0.5 sm:py-1 rounded-md sm:rounded-lg text-[9px] sm:text-[10px] font-bold text-rose-700 truncate flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
                                 title={p.title}
                               >
                                 <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0"></span>

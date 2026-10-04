@@ -46,6 +46,7 @@ classDiagram
 | **`target_condition`**| `String` | 선택 | 소득, 거주지, 취업상태 등 지원 자격 요건 | `"중위소득 60% 이하 (원가구 100% 이하)"` |
 | **`apply_method`** | `String` | 선택 | 신청 방법 및 접수 절차 | `"복지로 웹사이트 또는 행정복지센터 방문"` |
 | **`apply_url`** | `String` | 선택 | 신청 페이지 바로가기 링크 (URL) | `"https://www.bokjiro.go.kr"` |
+| **`keywords`** | `Array[String]` / `String` | 선택 | 정책 핵심 검색 및 AI 분류 키워드 (3개) | `["월세지원", "주거안정", "무주택청년"]`<br>`"월세지원, 주거안정, 무주택청년"` |
 | **`period_sdate`** | `String` | 선택 | 정책 신청/시작일 (YYYYMMDD 또는 YYYY-MM-DD, 상시 등) | `"20260727"`, `"2026-07-27"`, `"상시 접수"` |
 | **`period_edate`** | `String` | 선택 | 정책 마감/종료일 (YYYYMMDD 또는 YYYY-MM-DD, 상시/예산소진시 등) | `"20260812"`, `"2026-08-12"`, `"20261231"`, `"연중 사업"` |
 

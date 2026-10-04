@@ -16,27 +16,119 @@ load_dotenv()
 
 ontong_key = os.getenv("ONTONG_API_KEY")
 data_key = os.getenv("DATA_API_KEY")
+openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
+openrouter_model = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
 
-TODAY = "20260922"  # 오늘 기준일 (YYYYMMDD)
+TODAY = datetime.now().strftime("%Y%m%d")
+
+
+def extract_keywords_from_item(item: dict, title: str, summary: str = "", support: str = "", category: str = "") -> list:
+    """
+    1) API 원본 데이터에 정책 키워드가 존재하는지 확인 (plcyKeywrdCn, srchKywd, plcyKywd, keywords 등)
+    2) 없거나 비어있는 경우 OpenRouter (nvidia/nemotron-3-ultra-550b-a55b:free) AI 모델로 키워드 3개 추출
+    3) AI 호출 불가 또는 지연 시 스마트 룰 기반으로 3개 추출하여 반환
+    """
+    raw_kw = (
+        item.get("plcyKeywrdCn") or 
+        item.get("srchKywd") or 
+        item.get("plcyKywd") or 
+        item.get("keywords") or 
+        ""
+    )
+    if isinstance(raw_kw, list) and len(raw_kw) > 0:
+        cleaned_list = [str(k).strip().replace("#", "") for k in raw_kw if str(k).strip()]
+        if len(cleaned_list) >= 3:
+            return cleaned_list[:3]
+        elif cleaned_list:
+            raw_kw = ", ".join(cleaned_list)
+
+    if isinstance(raw_kw, str) and raw_kw.strip():
+        tokens = [t.strip().replace("#", "") for t in re.split(r"[,/|#\s]+", raw_kw) if len(t.strip()) >= 2]
+        if len(tokens) >= 3:
+            return tokens[:3]
+
+    if openrouter_key and not openrouter_key.startswith("sk-or-v1-your"):
+        try:
+            resp = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {openrouter_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": openrouter_model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "당신은 대한민국 청년 정책 메타데이터 전문가입니다. 주어진 정책 정보를 읽고 핵심 검색 키워드 3개를 JSON 배열로 출력하세요. 예: [\"월세지원\", \"주거안정\", \"무주택청년\"]"
+                        },
+                        {
+                            "role": "user",
+                            "content": f"[정책명]: {title}\n[카테고리]: {category}\n[지원내용]: {support[:300]}\n\n핵심 키워드 3개 JSON 배열:"
+                        }
+                    ],
+                    "temperature": 0.1
+                },
+                timeout=4
+            )
+            if resp.status_code == 200:
+                res_data = resp.json()
+                content = res_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                match = re.search(r"\[[\s\S]*?\]", content)
+                if match:
+                    parsed = json.loads(match.group(0))
+                    if isinstance(parsed, list) and len(parsed) >= 1:
+                        clean_kws = [str(k).strip().replace("#", "") for k in parsed if str(k).strip()][:3]
+                        if len(clean_kws) == 3:
+                            return clean_kws
+        except Exception:
+            pass
+
+    candidates = []
+    combined = f"{title} {category} {summary} {support}".lower()
+
+    pool = [
+        ("월세", "월세지원"), ("전세", "전세보증"), ("주거", "주거안정"), ("임대", "공공임대"),
+        ("취업", "취업지원"), ("구직", "구직활동"), ("인턴", "일경험인턴"), ("창업", "청년창업"),
+        ("자산", "자산형성"), ("도약", "청년도약"), ("적금", "청년적금"), ("교통", "교통비지원"),
+        ("패스", "K패스"), ("마음", "심리지원"), ("역량", "역량강화"), ("교육", "직업훈련"),
+        ("학자금", "학자금지원"), ("문화", "문화예술"), ("소득세", "세제감면"), ("중소기업", "중소기업청년")
+    ]
+
+    for trigger, kw in pool:
+        if trigger in combined and kw not in candidates:
+            candidates.append(kw)
+            if len(candidates) == 3:
+                return candidates
+
+    nouns = [w for w in re.sub(r"[^\w\s]", " ", title).split() if len(w) >= 2 and w not in ["청년", "지원", "사업", "안내", "특별", "맞춤"]]
+    for n in nouns:
+        if n not in candidates:
+            candidates.append(n)
+            if len(candidates) == 3:
+                return candidates
+
+    defaults = ["청년지원", "생활안정", "맞춤혜택"]
+    for df in defaults:
+        if df not in candidates:
+            candidates.append(df)
+        if len(candidates) == 3:
+            break
+
+    return candidates[:3]
 
 
 # --------------------------------------------------------------------------
 # 1. 정책 유효 상태 판별 함수 (진행중 / 예정 / 마감)
 # --------------------------------------------------------------------------
 def classify_policy_status(policy, today=TODAY):
-    """
-    정책의 신청기간(aplyYmd)과 사업기간(bizPrdEndYmd)을 분석하여
-    '진행중', '예정', '마감'으로 분류
-    """
     aply_ymd = (policy.get("aplyYmd") or "").strip()
     biz_start = (policy.get("bizPrdBgngYmd") or "").strip()
     biz_end = (policy.get("bizPrdEndYmd") or "").strip()
     biz_etc = (policy.get("bizPrdEtcCn") or "").strip()
 
-    # 상시/연중/예산소진시 등 계속 진행 키워드 확인
     is_continuous = any(k in aply_ymd or k in biz_etc for k in ["상시", "연중", "소진", "계속", "수시", "별도"])
 
-    # 1. 신청 기간 내 YYYYMMDD 날짜 추출
     clean_aply = re.sub(r"[^0-9]", " ", aply_ymd)
     date_tokens = [t for t in clean_aply.split() if len(t) == 8 and t.startswith("20")]
 
@@ -50,7 +142,6 @@ def classify_policy_status(policy, today=TODAY):
             return "예정", f"신청예정({start_date} 오픈)"
         return "진행중", f"신청진행중(~{end_date})"
 
-    # 2. 사업 기간 기준 검사
     if biz_end and biz_end.isdigit() and len(biz_end) == 8:
         if biz_end < today and not is_continuous:
             return "마감", f"사업종료({biz_end})"
@@ -58,7 +149,6 @@ def classify_policy_status(policy, today=TODAY):
             return "예정", f"사업시작예정({biz_start})"
         return "진행중", f"사업진행중(~{biz_end})"
 
-    # 날짜 명시 없는 경우 상시 진행으로 분류
     return "진행중", "상시 모집/진행"
 
 
@@ -66,7 +156,6 @@ def classify_policy_status(policy, today=TODAY):
 # 2. 온통청년 API에서 유효 정책(진행중 + 예정) 수집
 # --------------------------------------------------------------------------
 def fetch_ontong_valid_policies(api_key, max_pages=3):
-    """온통청년 API를 호출하여 유효한 정책만 표준 스키마로 가공하여 반환"""
     print(f"\n📡 [온통청년 API] 유효 정책 데이터 호출 중...")
     url = "https://www.youthcenter.go.kr/go/ythip/getPlcy"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -93,7 +182,6 @@ def fetch_ontong_valid_policies(api_key, max_pages=3):
             for item in items:
                 status, status_msg = classify_policy_status(item, TODAY)
                 
-                # '마감'된 것은 제외하고 '진행중' 및 '예정'만 수집
                 if status == "마감":
                     expired_cnt += 1
                     continue
@@ -102,6 +190,7 @@ def fetch_ontong_valid_policies(api_key, max_pages=3):
                 desc = " ".join((item.get("plcyExplnCn") or "").split())
                 support = " ".join((item.get("plcySprtCn") or "").split())
                 organ = item.get("sprvsnInstCdNm") or item.get("operInstCdNm") or "정부부처/지자체"
+                title = item.get("plcyNm", "제목 없음")
                 
                 min_age = item.get("sprtTrgtMinAge")
                 max_age = item.get("sprtTrgtMaxAge")
@@ -116,16 +205,20 @@ def fetch_ontong_valid_policies(api_key, max_pages=3):
                 mclsf = item.get("mclsfNm", "") or ""
                 category_str = f"{lclsf} > {mclsf}".strip(" >")
 
+                keywords = extract_keywords_from_item(item, title, desc, support, category_str)
+
                 valid_list.append({
                     "id": f"ONTONG_{plcy_no}",
                     "source": "온통청년 (youthcenter.go.kr)",
                     "status": status,
                     "status_detail": status_msg,
-                    "title": item.get("plcyNm", "제목 없음"),
+                    "title": title,
                     "category": category_str,
                     "organization": organ,
                     "summary": desc,
                     "support_content": support,
+                    "keywords": keywords,
+                    "keywords_str": ", ".join(keywords),
                     "target_age": age_str,
                     "target_condition": item.get("ptcpPrpTrgtCn") or item.get("addAplyQlfcCndCn") or "해당 연령 청년 대상",
                     "apply_period": apply_period,
@@ -134,10 +227,10 @@ def fetch_ontong_valid_policies(api_key, max_pages=3):
                     "apply_url": item.get("aplyUrlAddr") or item.get("refUrlAddr1") or "https://www.youthcenter.go.kr"
                 })
         except Exception as e:
-            print(f"  ❌ 온통청년 API 호출 오류: {e}")
+            print(f"  ❌ [{page}페이지] 온통청년 API 호출 오류: {e}")
             break
             
-    print(f"  ✅ 온통청년: 유효 정책 {len(valid_list)}건 수집 완료 (마감 제외: {expired_cnt}건)")
+    print(f"  ✅ 온통청년: 유효 정책 {len(valid_list)}건 수집 완료 (마감 {expired_cnt}건 제외)")
     return valid_list
 
 
@@ -145,10 +238,10 @@ def fetch_ontong_valid_policies(api_key, max_pages=3):
 # 3. 공공데이터포털(data.go.kr) 유효 복지/혜택 데이터 수집
 # --------------------------------------------------------------------------
 def fetch_data_go_kr_valid_benefits(api_key):
-    """공공데이터포털의 대표 청년 복지·혜택 중 유효한 정책들을 표준 스키마로 구성"""
     print(f"\n📡 [공공데이터포털] 청년 복지·혜택 데이터 구성 중...")
     
-    # 대한민국 대표 상시/연중 유효 청년 복지 혜택 카탈로그
+    current_year = datetime.now().year
+    
     public_catalog = [
         ("청년월세 한시 특별지원", "주거 > 월세지원", "국토교통부", "부모와 별도 거주하는 무주택 청년 대상 실제 납부 임차료 월 최대 20만원(최대 12개월) 지원", "월 최대 20만원 지원 (12회 분할 지급)", "만 19세~34세 무주택 청년", "중위소득 60% 이하 (원가구 100% 이하)", "복지로 웹사이트 또는 행정복지센터 방문", "https://www.bokjiro.go.kr", "진행중", "상시 접수 중"),
         ("청년도약계좌", "금융 > 자산형성", "금융위원회", "청년의 중장기 자산형성을 지원하기 위한 정책금융상품으로 매월 최대 70만원 저축 시 정부기여금 및 이자 비과세 혜택", "정부기여금 월 최대 3.3만원 매칭 지원 및 이자소득 비과세", "만 19세~34세", "개인소득 7,500만원 이하 & 가구소득 중위 250% 이하", "취급 은행 앱(App) 비대면 신청", "https://www.kinfa.or.kr", "진행중", "매월 초 가입신청 접수"),
@@ -170,6 +263,7 @@ def fetch_data_go_kr_valid_benefits(api_key):
     results = []
     for idx, item in enumerate(public_catalog, start=1):
         title, cat, organ, summary, support, age, cond, method, url, status, s_detail = item
+        keywords = extract_keywords_from_item({}, title, summary, support, cat)
         results.append({
             "id": f"DATA_GO_{idx:03d}",
             "source": "공공데이터포털 (data.go.kr)",
@@ -180,10 +274,12 @@ def fetch_data_go_kr_valid_benefits(api_key):
             "organization": organ,
             "summary": summary,
             "support_content": support,
+            "keywords": keywords,
+            "keywords_str": ", ".join(keywords),
             "target_age": age,
             "target_condition": cond,
             "apply_period": "상시 접수 / 연중 사업",
-            "business_period": "20260101 ~ 20261231",
+            "business_period": f"{current_year}0101 ~ {current_year}1231",
             "apply_method": method,
             "apply_url": url
         })
@@ -196,31 +292,25 @@ def fetch_data_go_kr_valid_benefits(api_key):
 # 4. 정책 중복 제거 및 지능형 병합 (Deduplication)
 # --------------------------------------------------------------------------
 def normalize_title(title):
-    """제목에서 공백, 특수문자, 괄호 등을 제거하여 정규화된 키 생성"""
     cleaned = re.sub(r"[\(\)\[\]\<\>《》\'\"\s·\-_,]", "", title)
     return cleaned.lower()
 
 
 def merge_and_deduplicate_policies(ontong_list, public_list):
-    """
-    온통청년과 공공데이터포털 데이터를 합치고, 동일/유사 정책은 하나로 병합
-    """
     print(f"\n🔄 [중복 제거 및 데이터 병합 시작]")
     print(f"  • 온통청년 유효 정책     : {len(ontong_list)}건")
     print(f"  • 공공데이터포털 유효 정책 : {len(public_list)}건")
     print(f"  • 병합 전 전체 정책       : {len(ontong_list) + len(public_list)}건")
 
-    seen_titles = {}      # normalized_title -> policy_object
+    seen_titles = {}
     deduplicated = []
     duplicate_count = 0
 
-    # 1. 온통청년 데이터를 먼저 등록 (기본 메인 소스)
     for p in ontong_list:
         norm_key = normalize_title(p["title"])
         seen_titles[norm_key] = p
         deduplicated.append(p)
 
-    # 2. 공공데이터포털 데이터를 순회하며 중복 검사
     for p in public_list:
         norm_key = normalize_title(p["title"])
         
@@ -237,6 +327,9 @@ def merge_and_deduplicate_policies(ontong_list, public_list):
             if not existing_policy.get("apply_url") or "youthcenter" in existing_policy["apply_url"]:
                 if p.get("apply_url"):
                     existing_policy["apply_url"] = p["apply_url"]
+            if not existing_policy.get("keywords") and p.get("keywords"):
+                existing_policy["keywords"] = p["keywords"]
+                existing_policy["keywords_str"] = p.get("keywords_str", ", ".join(p["keywords"]))
             print(f"  💡 중복 정책 병합: '{p['title']}' <-> '{existing_policy['title']}'")
         else:
             seen_titles[norm_key] = p
@@ -248,44 +341,47 @@ def merge_and_deduplicate_policies(ontong_list, public_list):
 
 
 # --------------------------------------------------------------------------
-# 5. 메인 실행: 데이터 수집 -> 정규화 -> 중복제거 -> [2026.09.22 생성시간].json 저장
+# 5. 메인 실행: 데이터 수집 -> 정규화 -> 중복제거 -> project02/backend/data/ 저장
 # --------------------------------------------------------------------------
 def main():
     now = datetime.now()
-    time_str = now.strftime("%H시%M분")  # 예: 17시16분
+    file_timestamp = now.strftime("%Y%m%d_%H%M")
     
     print("=" * 75)
-    print("🚀 청년 정책·혜택 유효 데이터 수집 & 중복 제거 파이프라인 가동")
+    print("🚀 청년 정책·혜택 유효 데이터 수집 & AI 키워드 추출 파이프라인 가동")
     print(f"   기준일자: {TODAY} | 실행시각: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"   AI 모델  : OpenRouter ({openrouter_model})")
     print("=" * 75)
 
-    # 1. 온통청년에서 유효 데이터 수집
     ontong_policies = fetch_ontong_valid_policies(ontong_key, max_pages=3)
-
-    # 2. 공공데이터포털에서 유효 데이터 수집
     public_policies = fetch_data_go_kr_valid_benefits(data_key)
-
-    # 3. 중복 제거 및 데이터 병합
     unified_policies = merge_and_deduplicate_policies(ontong_policies, public_policies)
 
-    # 4. 요청된 파일명 형식: [2026.09.22 생성시간].json 저장
-    output_filename = f"[2026.09.22 {time_str}].json"
-    with open(output_filename, "w", encoding="utf-8") as f:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    output_dir = os.path.abspath(os.path.join(current_dir, "backend", "data"))
+    os.makedirs(output_dir, exist_ok=True)
+
+    output_filename = f"{file_timestamp}.json"
+    output_filepath = os.path.join(output_dir, output_filename)
+
+    with open(output_filepath, "w", encoding="utf-8") as f:
         json.dump(unified_policies, f, ensure_ascii=False, indent=2)
 
     print("\n" + "=" * 75)
-    print(f"💾 [저장 완료] 최종 파일 생성: {output_filename}")
+    print(f"💾 [저장 완료] 최종 JSON 파일 생성 완료:")
+    print(f"   📂 저장 디렉토리: {output_dir}")
+    print(f"   📄 저장 파일명  : {output_filename}")
+    print(f"   📍 전체 파일경로: {output_filepath}")
     print("=" * 75)
 
-    # 5. 상태별 통계 출력
     open_cnt = sum(1 for p in unified_policies if p["status"] == "진행중")
     upcoming_cnt = sum(1 for p in unified_policies if p["status"] == "예정")
     
     print(f"📊 [통합 데이터 요약 통계]")
-    print(f"  • 🟢 현재 신청/진행 중인 정책 : {open_cnt}건")
+    print(f"  • 🟢 현재 신청/진행/상시 정책 : {open_cnt}건")
     print(f"  • 🔵 차후 시작 예정인 정책   : {upcoming_cnt}건")
     print(f"  • 📋 총 고유 유효 정책 수     : {len(unified_policies)}건")
-    print("-" * 75)
+    print("=" * 75)
 
 
 if __name__ == "__main__":

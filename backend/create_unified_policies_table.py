@@ -48,6 +48,7 @@ class UnifiedPolicy(Base):
     target_condition = Column(Text, nullable=True) # 자격 요건 (길어질 수 있으므로 Text)
     apply_method = Column(String(255), nullable=True) # 신청 방법
     apply_url = Column(String(255), nullable=True) # 신청 페이지 URL
+    keywords = Column(Text, nullable=True) # 정책 키워드 (3개)
     period_sdate = Column(String(50), nullable=True) # 시작일 (상시 등 문자열 포함 가능)
     period_edate = Column(String(50), nullable=True) # 종료일
 

@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS youth_policies (
     apply_method        TEXT,                                       -- 신청 방법 및 접수 절차 (온라인 접수처, 방문 접수 등)
     apply_url           TEXT,                                       -- 신청 및 상세 공고 링크 (URL)
     
+    -- 정책 키워드 (3개)
+    keywords            VARCHAR(255),                               -- 정책 핵심 키워드 (예: 월세지원, 주거안정, 무주택청년)
+    
     -- 부가 메타데이터
     view_count          INTEGER DEFAULT 0,                          -- 조회수
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,        -- 레코드 생성 일시
@@ -53,6 +56,7 @@ CREATE INDEX IF NOT EXISTS idx_youth_policies_status ON youth_policies(status);
 CREATE INDEX IF NOT EXISTS idx_youth_policies_organization ON youth_policies(organization);
 CREATE INDEX IF NOT EXISTS idx_youth_policies_source ON youth_policies(source);
 CREATE INDEX IF NOT EXISTS idx_youth_policies_title ON youth_policies(title);
+CREATE INDEX IF NOT EXISTS idx_youth_policies_keywords ON youth_policies(keywords);
 
 -- ==============================================================================
 -- 3. 선택적 보조 테이블 (관심 정책 북마크 및 구비서류 관리용 확장 스키마)
@@ -73,3 +77,22 @@ CREATE TABLE IF NOT EXISTS policy_documents (
     document_name       VARCHAR(255) NOT NULL,                      -- 구비서류 명칭 (예: 주민등록등본, 소득금액증명원 등)
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 3-3. 정책 직결 뉴스 및 AI 요약/키워드 테이블 (policy_news)
+CREATE TABLE IF NOT EXISTS policy_news (
+    id                  VARCHAR(100) PRIMARY KEY,                   -- 뉴스 고유 ID (예: NEWS_ONTONG_001_1727000000)
+    policy_id           VARCHAR(100) REFERENCES youth_policies(id) ON DELETE SET NULL,
+    policy_name         VARCHAR(255) NOT NULL,                      -- 정책명
+    title               VARCHAR(255) NOT NULL,                      -- 기사 제목
+    publisher           VARCHAR(100),                               -- 언론사명
+    url                 TEXT NOT NULL,                              -- 기사 원문 링크
+    published_at        VARCHAR(50),                                -- 보도 일시
+    summary_3lines      TEXT NOT NULL,                              -- AI 3줄 요약
+    keywords            VARCHAR(255),                               -- AI 추출 뉴스 핵심 키워드 5개 이상 (쉼표 구분)
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_policy_news_policy_id ON policy_news(policy_id);
+CREATE INDEX IF NOT EXISTS idx_policy_news_keywords ON policy_news(keywords);
+

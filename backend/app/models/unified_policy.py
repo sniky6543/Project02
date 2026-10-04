@@ -23,5 +23,6 @@ class UnifiedPolicy(Base):
     target_condition: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="자격 요건")
     apply_method: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="신청 방법")
     apply_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="신청 페이지 URL")
+    keywords: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="정책 키워드 (3개)")
     period_sdate: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="시작일")
     period_edate: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="종료일")

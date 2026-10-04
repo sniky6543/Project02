@@ -124,6 +124,13 @@ class SupabasePolicyUploader:
         if ai_3lines and ai_3lines not in details:
             details = f"{support}\n\n[AI 3줄 요약]\n{ai_3lines}".strip()
 
+        # 키워드 처리 (리스트 -> 쉼표 구분 문자열)
+        raw_keywords = item.get("keywords") or item.get("keywords_str") or ""
+        if isinstance(raw_keywords, list):
+            keywords_str = ", ".join([str(k).strip() for k in raw_keywords if str(k).strip()])
+        else:
+            keywords_str = str(raw_keywords).strip()
+
         # policies 테이블 스키마에 대응
         record = {
             "id": str(item.get("id")),
@@ -133,6 +140,7 @@ class SupabasePolicyUploader:
             "status": str(item.get("status", "접수중"))[:30],
             "benefit_summary": summary,
             "benefit_details": details or summary,
+            "keywords": keywords_str,
             "target_age": str(item.get("target_age", "만 19세 ~ 34세"))[:50],
             "min_age": min_age,
             "max_age": max_age,

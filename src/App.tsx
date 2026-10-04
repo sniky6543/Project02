@@ -90,10 +90,13 @@ export const App: React.FC = () => {
   return (
     <div className="min-h-screen flex flex-col bg-[#f8fafc] text-slate-800">
       {/* Top Fixed Header */}
-      <Header activeTab={activeTab} onNavigate={(tab) => {
+      <Header activeTab={activeTab} onNavigate={(tab, policyId) => {
         if (tab === 'explore') {
           // 헤더에서 직접 정책탐색 탭을 클릭할 때는 필터 파라미터 초기화
           setExploreInitialParams(null);
+        }
+        if (policyId) {
+          setSelectedPolicyId(policyId);
         }
         setActiveTab(tab);
       }} />
@@ -119,7 +122,7 @@ export const App: React.FC = () => {
       {/* Floating Quick Screen Switcher for reviewing all 7 screens */}
       <aside
         aria-label="화면 퀵 스위처"
-        className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2"
+        className="fixed bottom-20 lg:bottom-4 right-3 sm:right-4 z-50 flex flex-col items-end gap-2"
       >
         {showQuickSwitcher ? (
           <div className="bg-slate-900/90 backdrop-blur-xl border border-slate-700/80 rounded-2xl p-3 shadow-2xl text-white flex flex-col gap-2 max-w-[340px] sm:max-w-none">
