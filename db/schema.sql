@@ -98,6 +98,19 @@ CREATE TABLE IF NOT EXISTS policy_news (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 7. 알림 및 메시지 발송 기록 테이블 (Notification Logs)
+CREATE TABLE IF NOT EXISTS notification_logs (
+    no SERIAL PRIMARY KEY,
+    send_method VARCHAR(20) NOT NULL, -- 발송 방법 (email / telegram / system)
+    recipient_id VARCHAR(255) NOT NULL, -- 수신자 ID (텔레그램 ID 또는 이메일 주소)
+    content TEXT NOT NULL, -- 발송된 알림 메시지 본문 내용
+    sent_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL, -- 발송 일시
+    user_id VARCHAR(50) REFERENCES users(id) ON DELETE SET NULL, -- 연계 사용자 ID (선택)
+    policy_id VARCHAR(50) REFERENCES policies(id) ON DELETE SET NULL, -- 연계 정책 ID (선택)
+    status VARCHAR(20) DEFAULT 'SENT', -- 발송 상태 (SENT, REGISTERED, SUCCESS, FAILED)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- 인덱스 생성 (검색 성능 최적화)
 CREATE INDEX IF NOT EXISTS idx_policies_category ON policies(category);
 CREATE INDEX IF NOT EXISTS idx_policies_status ON policies(status);
@@ -106,4 +119,9 @@ CREATE INDEX IF NOT EXISTS idx_policies_income ON policies(min_income, max_incom
 CREATE INDEX IF NOT EXISTS idx_policies_keywords ON policies(keywords);
 CREATE INDEX IF NOT EXISTS idx_policy_news_policy_id ON policy_news(policy_id);
 CREATE INDEX IF NOT EXISTS idx_policy_news_keywords ON policy_news(keywords);
+CREATE INDEX IF NOT EXISTS idx_notification_logs_method_sent ON notification_logs(send_method, sent_at);
+CREATE INDEX IF NOT EXISTS idx_notification_logs_recipient ON notification_logs(recipient_id);
+CREATE INDEX IF NOT EXISTS idx_notification_logs_policy_id ON notification_logs(policy_id);
+CREATE INDEX IF NOT EXISTS idx_notification_logs_user_id ON notification_logs(user_id);
+
 

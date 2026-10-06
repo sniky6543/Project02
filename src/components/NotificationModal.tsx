@@ -1,5 +1,5 @@
-import React from 'react';
-import { NotificationHistoryItem } from '../utils/notificationStorage';
+import React, { useState } from 'react';
+import { NotificationHistoryItem, syncNotificationHistoryFromDB } from '../utils/notificationStorage';
 
 interface NotificationModalProps {
   isOpen: boolean;
@@ -20,9 +20,29 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
   onNavigateToDetail,
   onNavigateToProfile,
 }) => {
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [activeFilter, setActiveFilter] = useState<'all' | 'telegram' | 'email'>('all');
+
   if (!isOpen) return null;
 
   const hasRecipient = Boolean(recipient && recipient.trim());
+
+  const handleSyncDB = async () => {
+    setIsSyncing(true);
+    try {
+      await syncNotificationHistoryFromDB(recipient, channel);
+    } catch (err) {
+      console.warn('DB Sync Error:', err);
+    } finally {
+      setTimeout(() => setIsSyncing(false), 500);
+    }
+  };
+
+  const filteredHistory = history.filter((item) => {
+    if (activeFilter === 'telegram') return item.channel === 'telegram';
+    if (activeFilter === 'email') return item.channel === 'email';
+    return true;
+  });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
@@ -38,14 +58,14 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="text-lg font-bold tracking-tight text-white">맞춤 정책 알림 발송 내역</h3>
+                <h3 className="text-lg font-bold tracking-tight text-white">맞춤 정책 알림 발송 내역 (DB)</h3>
                 <span className="px-2.5 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/30 text-xs font-semibold flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                  실시간 연동
+                  DB 실시간 연동
                 </span>
               </div>
               <p className="text-xs text-sky-100/90 pt-0.5">
-                등록된 {channel === 'telegram' ? '텔레그램 ID' : '이메일'} 계정으로 발송된 알림 목록입니다.
+                텔레그램 ID 및 이메일로 발송된 알림 내용, 보낸 아이디, 발송 일시가 DB에 영구 보관됩니다.
               </p>
             </div>
           </div>
@@ -60,10 +80,10 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
           </button>
         </div>
 
-        {/* Recipient Channel Info Bar */}
+        {/* Recipient Channel & Filter Info Bar */}
         <div className="px-6 py-3 bg-sky-50 border-b border-sky-100 flex flex-wrap items-center justify-between gap-2 text-xs">
           <div className="flex items-center gap-2">
-            <span className="font-bold text-slate-700">수신 계정:</span>
+            <span className="font-bold text-slate-700">현재 수신 계정:</span>
             {hasRecipient ? (
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-sky-200 text-sky-800 font-semibold shadow-2xs">
                 {channel === 'telegram' ? (
@@ -87,17 +107,52 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
             )}
           </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              onClose();
-              onNavigateToProfile?.();
-            }}
-            className="text-xs font-bold text-sky-700 hover:text-sky-900 hover:underline flex items-center gap-1 cursor-pointer"
-          >
-            <span>수신 설정 변경</span>
-            <span>⚙️</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Filter Pills */}
+            <div className="flex items-center bg-white/80 p-0.5 rounded-lg border border-sky-200 text-[11px] font-bold">
+              <button
+                type="button"
+                onClick={() => setActiveFilter('all')}
+                className={`px-2 py-0.5 rounded-md transition-all ${
+                  activeFilter === 'all' ? 'bg-sky-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                전체 ({history.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveFilter('telegram')}
+                className={`px-2 py-0.5 rounded-md transition-all ${
+                  activeFilter === 'telegram' ? 'bg-[#229ED9] text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                텔레그램 ({history.filter((h) => h.channel === 'telegram').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveFilter('email')}
+                className={`px-2 py-0.5 rounded-md transition-all ${
+                  activeFilter === 'email' ? 'bg-sky-600 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                이메일 ({history.filter((h) => h.channel === 'email').length})
+              </button>
+            </div>
+
+            {/* DB Refresh Button */}
+            <button
+              type="button"
+              onClick={handleSyncDB}
+              disabled={isSyncing}
+              className="p-1.5 rounded-lg bg-white border border-sky-200 hover:bg-sky-100 text-sky-700 text-xs transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
+              title="DB에서 최신 발송 내역 새로고침"
+            >
+              <span className={`material-symbols-outlined text-[14px] ${isSyncing ? 'animate-spin' : ''}`}>
+                sync
+              </span>
+              <span className="hidden sm:inline font-bold">DB 동기화</span>
+            </button>
+          </div>
         </div>
 
         {/* Notifications List */}
@@ -123,27 +178,25 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                 <span>⚙️</span>
               </button>
             </div>
-          ) : history.length === 0 ? (
+          ) : filteredHistory.length === 0 ? (
             <div className="p-12 text-center bg-white rounded-2xl border border-slate-200 text-slate-500 space-y-3">
               <p className="text-4xl">📭</p>
               <div className="space-y-1">
-                <p className="text-base font-bold text-slate-800">수신된 알림 메시지가 없습니다.</p>
+                <p className="text-base font-bold text-slate-800">해당 채널로 수신된 알림 메시지가 없습니다.</p>
                 <p className="text-xs text-slate-400">
-                  등록된 계정(<strong className="text-slate-700">{recipient}</strong>)으로 아직 발송된 맞춤 알림 내역이 없습니다.
+                  등록된 계정(<strong className="text-slate-700">{recipient}</strong>)으로 발송된 맞춤 알림 내역이 없습니다.
                 </p>
                 <p className="text-[11px] text-slate-400 pt-1">
-                  관심 정책을 저장하거나 새로운 맞춤 공고가 발생하면 알림이 수신됩니다.
+                  관심 정책 상세 페이지에서 [알림 신청]을 누르거나 프로필에서 [테스트 알림 발송]을 진행하면 DB에 저장됩니다.
                 </p>
               </div>
             </div>
           ) : (
-            history.map((item) => {
+            filteredHistory.map((item) => {
               const typeColor =
-                item.type === 'DEADLINE_ALERT'
-                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                  : item.type === 'NEW_MATCH'
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : 'bg-sky-50 text-sky-700 border-sky-200';
+                item.channel === 'telegram'
+                  ? 'bg-sky-50 text-sky-700 border-sky-200'
+                  : 'bg-indigo-50 text-indigo-700 border-indigo-200';
 
               return (
                 <article
@@ -154,46 +207,55 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
                       onNavigateToDetail?.(item.policyId);
                     }
                   }}
-                  className="p-4 md:p-5 rounded-2xl bg-white border border-sky-100 hover:border-sky-300 shadow-xs hover:shadow-md transition-all space-y-2.5 cursor-pointer group"
+                  className="p-4 md:p-5 rounded-2xl bg-white border border-sky-100 hover:border-sky-300 shadow-xs hover:shadow-md transition-all space-y-3 cursor-pointer group"
                 >
                   {/* Item Header */}
                   <div className="flex items-center justify-between text-xs">
                     <div className="flex items-center gap-2">
                       <span className={`px-2 py-0.5 rounded-md font-bold text-[11px] border ${typeColor}`}>
-                        {item.typeLabel}
+                        {item.channel === 'telegram' ? '✈️ 텔레그램' : '✉️ 이메일'}
                       </span>
                       <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-semibold text-[11px]">
-                        {item.category}
+                        {item.category || item.typeLabel}
                       </span>
                     </div>
                     <div className="flex items-center gap-2 text-slate-400 font-medium text-[11px]">
-                      <span>{item.sentAt}</span>
+                      <span className="text-slate-500 font-mono">{item.sentAt}</span>
                       <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600 font-bold border border-emerald-100 text-[10px]">
-                        발송완료
+                        DB 저장 완료 ✅
                       </span>
                     </div>
                   </div>
 
-                  {/* Title */}
-                  <h4 className="text-sm md:text-base font-bold text-slate-900 group-hover:text-sky-600 transition-colors leading-snug flex items-center justify-between gap-2">
-                    <span>{item.policyTitle}</span>
+                  {/* Title & Recipient Row */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h4 className="text-sm md:text-base font-bold text-slate-900 group-hover:text-sky-600 transition-colors leading-snug">
+                        {item.policyTitle}
+                      </h4>
+                      <p className="text-[11px] text-slate-500 pt-0.5">
+                        수신 계정 (보낸 ID): <strong className="text-slate-700 font-mono">{item.recipient}</strong>
+                      </p>
+                    </div>
                     <span className="text-slate-400 group-hover:text-sky-600 text-xs shrink-0">→</span>
-                  </h4>
+                  </div>
 
-                  {/* Message Body */}
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 text-xs text-slate-600 leading-relaxed">
-                    <p>{item.message}</p>
+                  {/* Message Body (Content) */}
+                  <div className="p-3.5 rounded-xl bg-slate-50/80 border border-slate-100 text-xs text-slate-700 leading-relaxed font-sans whitespace-pre-line">
+                    {item.message}
                   </div>
 
                   {/* Item Footer */}
-                  <div className="flex items-center justify-between pt-1 text-xs">
-                    <span className="text-slate-400 text-[11px]">
-                      수신 채널: {item.channel === 'telegram' ? '텔레그램 봇' : '이메일'} ({item.recipient})
+                  <div className="flex items-center justify-between pt-1 text-xs text-slate-400">
+                    <span className="text-[11px]">
+                      채널: {item.channel.toUpperCase()} | 발송 상태: {item.status}
                     </span>
-                    <span className="text-sky-600 font-bold text-xs group-hover:underline flex items-center gap-0.5">
-                      <span>상세 정보 보기</span>
-                      <span>→</span>
-                    </span>
+                    {item.policyId && (
+                      <span className="text-sky-600 font-bold text-xs group-hover:underline flex items-center gap-0.5">
+                        <span>정책 상세 보기</span>
+                        <span>→</span>
+                      </span>
+                    )}
                   </div>
                 </article>
               );
@@ -204,7 +266,7 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
         {/* Modal Footer */}
         <div className="p-4 px-6 bg-white border-t border-slate-100 flex items-center justify-between gap-3">
           <span className="text-xs text-slate-500">
-            총 <strong>{history.length}</strong>건의 알림 기록
+            총 <strong>{filteredHistory.length}</strong>건의 알림 기록 (DB 보관)
           </span>
           <div className="flex items-center gap-2">
             <button
@@ -215,14 +277,14 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
               }}
               className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
             >
-              알림 수신 설정 ⚙️
+              수신 설정 변경 ⚙️
             </button>
             <button
               type="button"
               onClick={onClose}
               className="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs shadow-xs transition-all active:scale-95 cursor-pointer"
             >
-              확인
+              닫기
             </button>
           </div>
         </div>
@@ -232,3 +294,4 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
 };
 
 export default NotificationModal;
+
