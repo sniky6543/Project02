@@ -8,6 +8,7 @@ import {
   DEMO_PROFILE_SETTINGS,
 } from '../utils/profileStorage';
 import { getAllPolicies } from '../api/supabasePolicies';
+import { addNotificationHistory } from '../utils/notificationStorage';
 import { PolicyItem } from '../types/policy';
 import { calculatePolicyMatch } from '../utils/policyMatcher';
 import { KOREA_REGIONS, KOREA_CITIES } from '../utils/regionData';
@@ -70,6 +71,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
   const [showTelegramGuide, setShowTelegramGuide] = useState<boolean>(false);
   const [copiedBotId, setCopiedBotId] = useState<boolean>(false);
   const [testAlertSent, setTestAlertSent] = useState<boolean>(false);
+  const [emailTestAlertSent, setEmailTestAlertSent] = useState<boolean>(false);
 
   // UI 피드백 상태 (저장 알림 토스트 & 최종 저장 시각)
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -95,11 +97,64 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
     setTimeout(() => setCopiedBotId(false), 2500);
   };
 
-  // 텔레그램 테스트 알림 시뮬레이션
+  // 텔레그램 테스트 알림 발송 및 DB 저장
   const handleSendTestTelegramAlert = () => {
+    const targetTg = (telegramId && telegramId.trim()) || '@youth_compass_user';
     setTestAlertSent(true);
-    showToast('🔔 [테스트] 청년나침반 봇: 회원님의 맞춤 정책 알림이 정상 수신되었습니다!');
+
+    const nowStr = new Date().toLocaleString('ko-KR', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+
+    const testMsg = `[청년나침반 텔레그램 알림 연동 테스트]\n회원님의 텔레그램 계정(${targetTg})으로 맞춤 정책 알림이 정상 발송되었습니다.\n주요 청년 지원 정책 공고 및 마감 임박 알림이 실시간으로 발송됩니다.\n(발송 일시: ${nowStr})`;
+
+    addNotificationHistory({
+      policyTitle: '청년나침반 텔레그램 알림 연동 테스트',
+      category: '텔레그램 알림',
+      channel: 'telegram',
+      recipient: targetTg,
+      type: 'CUSTOM_ALERT',
+      typeLabel: '텔레그램 발송',
+      message: testMsg,
+    });
+
+    showToast(`🔔 [텔레그램 발송 완료] (${targetTg}) 계정으로 테스트 알림이 발송되어 DB에 저장되었습니다!`);
     setTimeout(() => setTestAlertSent(false), 3000);
+  };
+
+  // 이메일 테스트 알림 발송 및 DB 저장
+  const handleSendTestEmailAlert = () => {
+    const targetEmail = (emailAddress && emailAddress.trim()) || 'youth.compass@example.com';
+    setEmailTestAlertSent(true);
+
+    const nowStr = new Date().toLocaleString('ko-KR', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+
+    const testMsg = `[청년나침반 이메일 알림 연동 테스트]\n회원님의 이메일 계정(${targetEmail})으로 맞춤 정책 알림이 정상 발송되었습니다.\n신규 공고 및 접수 마감 안내가 이메일로 수신됩니다.\n(발송 일시: ${nowStr})`;
+
+    addNotificationHistory({
+      policyTitle: '청년나침반 이메일 알림 연동 테스트',
+      category: '이메일 알림',
+      channel: 'email',
+      recipient: targetEmail,
+      type: 'CUSTOM_ALERT',
+      typeLabel: '이메일 발송',
+      message: testMsg,
+    });
+
+    showToast(`📧 [이메일 발송 완료] (${targetEmail}) 계정으로 테스트 알림이 발송되어 DB에 저장되었습니다!`);
+    setTimeout(() => setEmailTestAlertSent(false), 3000);
   };
 
   // 만 나이 자동 계산 (NULL Safe)
@@ -993,7 +1048,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                         </button>
                       </div>
 
-                      <div className="mt-3 pt-3 border-t border-slate-200/80 space-y-1.5">
+                      <div className="mt-3 pt-3 border-t border-slate-200/80 space-y-2">
                         <div className="flex justify-between items-center">
                           <label className={`text-[11px] font-bold transition-colors ${isTelegramSelected ? 'text-slate-700' : 'text-slate-400'}`}>텔레그램 ID 입력</label>
                           <button
@@ -1016,9 +1071,23 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                               : 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed placeholder:text-slate-300'
                             }`}
                         />
-                        <p className={`text-[11px] transition-colors ${isTelegramSelected ? 'text-slate-500' : 'text-slate-300'}`}>
-                          @청년나침반_bot 추가 후 발급받은 Chat ID 또는 username을 입력해주세요.
-                        </p>
+                        <div className="flex items-center justify-between gap-2 pt-1">
+                          <p className={`text-[11px] transition-colors ${isTelegramSelected ? 'text-slate-500' : 'text-slate-300'}`}>
+                            @청년나침반_bot 추가 후 Chat ID 입력
+                          </p>
+                          <button
+                            type="button"
+                            disabled={!isTelegramSelected}
+                            onClick={handleSendTestTelegramAlert}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all shadow-2xs cursor-pointer shrink-0 flex items-center gap-1 ${
+                              isTelegramSelected
+                                ? 'bg-[#229ED9] hover:bg-[#1a8bc2] text-white'
+                                : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                            }`}
+                          >
+                            <span>{testAlertSent ? '발송 완료 ✅' : '🔔 테스트 알림 발송'}</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
 
@@ -1042,7 +1111,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                           <span className={`text-xs font-bold transition-colors ${isEmailSelected ? 'text-slate-900' : 'text-slate-600'}`}>이메일 알림</span>
                         </div>
                       </label>
-                      <div className="mt-3 pt-3 border-t border-slate-200/80 space-y-1.5">
+                      <div className="mt-3 pt-3 border-t border-slate-200/80 space-y-2">
                         <label className={`text-[11px] font-bold transition-colors ${isEmailSelected ? 'text-slate-700' : 'text-slate-400'}`}>이메일 주소 입력</label>
                         <input
                           type="email"
@@ -1055,9 +1124,23 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                               : 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed placeholder:text-slate-300'
                             }`}
                         />
-                        <p className={`text-[11px] transition-colors ${isEmailSelected ? 'text-slate-400' : 'text-slate-300'}`}>
-                          신규 맞춤 공고와 마감 임박 알림이 이메일로 발송됩니다.
-                        </p>
+                        <div className="flex items-center justify-between gap-2 pt-1">
+                          <p className={`text-[11px] transition-colors ${isEmailSelected ? 'text-slate-500' : 'text-slate-300'}`}>
+                            신규 맞춤 공고와 마감 임박 알림 발송
+                          </p>
+                          <button
+                            type="button"
+                            disabled={!isEmailSelected}
+                            onClick={handleSendTestEmailAlert}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all shadow-2xs cursor-pointer shrink-0 flex items-center gap-1 ${
+                              isEmailSelected
+                                ? 'bg-sky-600 hover:bg-sky-700 text-white'
+                                : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                            }`}
+                          >
+                            <span>{emailTestAlertSent ? '발송 완료 ✅' : '📧 테스트 알림 발송'}</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>

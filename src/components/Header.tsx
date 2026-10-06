@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useProfileNickname, loadProfileSettings } from '../utils/profileStorage';
-import { getNotificationHistory, NotificationHistoryItem } from '../utils/notificationStorage';
+import { getNotificationHistory, syncNotificationHistoryFromDB, NotificationHistoryItem } from '../utils/notificationStorage';
 import { NotificationModal } from './NotificationModal';
 
 export type TabKey = 
@@ -34,6 +34,24 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onNavigate }) => {
   const isCalendar = activeTab === 'calendar' || activeTab === 'kanban';
   const isProfile = activeTab === 'profile';
 
+  // 알림 내역 동기화 리스너
+  useEffect(() => {
+    const updateNotiState = () => {
+      const { history, recipient, channel } = getNotificationHistory();
+      setNotiHistory(history);
+      setNotiRecipient(recipient);
+      setNotiChannel(channel);
+    };
+
+    updateNotiState();
+    window.addEventListener('notification_history_updated', updateNotiState);
+    window.addEventListener('profile_settings_updated', updateNotiState);
+    return () => {
+      window.removeEventListener('notification_history_updated', updateNotiState);
+      window.removeEventListener('profile_settings_updated', updateNotiState);
+    };
+  }, []);
+
   // 헤더 알림 버튼 클릭 핸들러
   const handleNotificationClick = () => {
     const profile = loadProfileSettings();
@@ -59,6 +77,13 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, onNavigate }) => {
     setNotiRecipient(recipient);
     setNotiChannel(channel);
     setIsNotiModalOpen(true);
+
+    // DB에서 최신 알림 내역 비동기 동기화
+    if (recipient) {
+      syncNotificationHistoryFromDB(recipient, channel).then((updated) => {
+        setNotiHistory(updated);
+      });
+    }
   };
 
   return (
