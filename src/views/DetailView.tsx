@@ -4,6 +4,7 @@ import { PolicyDetail, PolicyItem, PolicyNewsItem } from '../types/policy';
 import { prioritizePoliciesByProfile } from '../utils/policyMatcher';
 import { loadProfileSettings } from '../utils/profileStorage';
 import { addNotificationHistory } from '../utils/notificationStorage';
+import { sendTelegramMessage } from '../utils/telegramAlert';
 
 interface DetailViewProps {
   onNavigate?: (path: string, policyId?: string) => void;
@@ -121,32 +122,79 @@ export const DetailView: React.FC<DetailViewProps> = ({ onNavigate, policyId }) 
     showToast(nextState ? '⭐ 관심 정책 목록에 저장되었습니다!' : '🗑️ 관심 정책 저장이 해제되었습니다.');
   };
 
-  // 정책 알람 신청 (정책 내용 + 등록 텔레그램ID/이메일 DB 등록)
+  // 정책 맞춤 알림 신청 (정책명 포함 등록 알림 발송 & DB 영구 보관)
   const handleApplyAlert = async () => {
     if (!policy) return;
     try {
       const profile = loadProfileSettings();
       const channel: 'telegram' | 'email' = profile.isEmailSelected ? 'email' : 'telegram';
-      const recipient = profile.isEmailSelected ? profile.emailAddress : profile.telegramId;
+      const recipient = (profile.isEmailSelected ? profile.emailAddress : profile.telegramId || '').trim();
 
-      const res = await applyPolicyAlert(policy.id);
+      // 계정 정보가 없는 경우 안내
+      if (!recipient) {
+        showToast(`⚠️ [${policy.title}] 알림을 수신할 계정(텔레그램 ID 또는 이메일)을 프로필에서 먼저 등록해주세요.`);
+        return;
+      }
 
-      if (recipient) {
-        addNotificationHistory({
-          policyId: policy.id,
-          policyTitle: policy.title,
-          category: policy.category,
-          channel,
-          recipient,
-          type: 'CUSTOM_ALERT',
-          typeLabel: '신청 정책 알림',
-          message: `[${policy.organization}] '${policy.title}' 정책 알림이 정상 등록되었습니다. 접수 마감 및 주요 변경사항이 발송됩니다.`
+      // 1. Supabase & 백엔드 DB 알림 신청 API 호출
+      const res = await applyPolicyAlert(policy.id, {
+        sendMethod: channel,
+        telegramId: profile.telegramId,
+        email: profile.emailAddress,
+        customMessage: `[${policy.title}] 맞춤 알림 신청 완료`
+      });
+
+      // 2. 알림 히스토리 및 알림함(Notification Modal)에 상세 등록 메시지 저장
+      const messageContent = `[${policy.organization}] '${policy.title}' 맞춤 정책 알림이 정상적으로 등록되었습니다.\n\n📌 신청 정책: ${policy.title}\n🏢 주관 기관: ${policy.organization} (${policy.category})\n🎯 지원 대상: ${policy.eligibility?.age || policy.targetAge || '청년 대상'}\n📅 접수 기간: ${policy.applyPeriod || policy.period || '상시 접수'}\n📬 수신 채널: ${channel === 'telegram' ? '텔레그램' : '이메일'} (${recipient})\n\n💡 접수 마감일 및 주요 변경 사항이 발생할 때마다 ${recipient}(으)로 알림이 신속하게 전송됩니다.`;
+
+      addNotificationHistory({
+        policyId: policy.id,
+        policyTitle: policy.title,
+        category: policy.category,
+        channel,
+        recipient,
+        type: 'CUSTOM_ALERT',
+        typeLabel: '맞춤 정책 알림 등록',
+        message: messageContent
+      });
+
+      // 3. 실제 텔레그램 수신 채널인 경우 텔레그램 메시지 전송
+      if (channel === 'telegram') {
+        sendTelegramMessage(recipient, messageContent).then((tgResult) => {
+          if (!tgResult.success) {
+            console.warn('[Telegram Alert Failed]', tgResult.message);
+          }
         });
       }
 
-      showToast(res.message || `🔔 [${policy.title}] 정책 알림이 등록된 텔레그램/이메일로 DB에 정상 신청되었습니다!`);
+      // 4. 브라우저 데스크톱 알림 (Notification API) 지원 시 푸시 발송
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        if (Notification.permission === 'granted') {
+          try {
+            new Notification('청년나침반 맞춤 정책 알림 등록 완료', {
+              body: `[${policy.title}] 정책이 정상적으로 등록되었습니다.`,
+              icon: '/favicon.ico'
+            });
+          } catch {}
+        } else if (Notification.permission !== 'denied') {
+          Notification.requestPermission().then((permission) => {
+            if (permission === 'granted') {
+              try {
+                new Notification('청년나침반 맞춤 정책 알림 등록 완료', {
+                  body: `[${policy.title}] 정책이 정상적으로 등록되었습니다.`,
+                  icon: '/favicon.ico'
+                });
+              } catch {}
+            }
+          });
+        }
+      }
+
+      // 4. 화면 토스트 알림 표시
+      showToast(`🔔 [${policy.title}] 맞춤 알림이 정상적으로 등록되었습니다! (${recipient})`);
     } catch (e) {
-      showToast('🔔 정책 알림 신청이 접수되었습니다.');
+      console.error('Failed to apply policy alert:', e);
+      showToast(`🔔 [${policy.title}] 정책 알림 신청이 접수되었습니다.`);
     }
   };
 
