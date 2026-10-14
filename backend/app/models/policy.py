@@ -40,6 +40,7 @@ class Policy(Base):
     # 신청 및 문의
     application_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     contact: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    keywords: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     view_count: Mapped[int] = mapped_column(Integer, default=0)
     
     # 생성 및 갱신 시각
@@ -59,6 +60,7 @@ class Policy(Base):
         Index("idx_policies_status", "status"),
         Index("idx_policies_age", "min_age", "max_age"),
         Index("idx_policies_income", "min_income", "max_income"),
+        Index("idx_policies_keywords", "keywords"),
     )
 
 

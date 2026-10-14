@@ -1,56 +1,119 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { getPolicies, toggleBookmark } from '../api/supabasePolicies';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { getPaginatedPolicies, getCategoryCounts, toggleBookmark, getLocalBookmarkedIds } from '../api/supabasePolicies';
 import { PolicyItem, PolicyCategory } from '../types/policy';
 import { usePersonalizedPolicies } from '../utils/policyMatcher';
 
 interface ExploreViewProps {
-  onNavigate?: (path: string, policyId?: string) => void;
+  onNavigate?: (path: string, policyId?: string, extraParams?: any) => void;
+  initialParams?: {
+    category?: string;
+    keyword?: string;
+    employment?: string;
+    region?: string;
+    [key: string]: any;
+  } | null;
 }
 
 type SortOption = 'matchScore' | 'deadline' | 'latest' | 'popular';
 
-export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
-  const [isFilterOpen, setIsFilterOpen] = useState(false);
+export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate, initialParams }) => {
+  const [isFilterOpen, setIsFilterOpen] = useState<boolean>(() => Boolean(initialParams && initialParams.category && initialParams.category !== '전체'));
 
-  // DB 데이터 및 로딩 상태
+  // DB 데이터 및 서버 사이드 페이지네이션 상태
   const [rawPolicies, setRawPolicies] = useState<PolicyItem[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [totalPages, setTotalPages] = useState<number>(1);
   const [loading, setLoading] = useState<boolean>(true);
 
-  // 사용자 프로필 정보 기반 맞춤 점수 계산 및 우선순위 정렬
-  const { policies, profile, hasProfile } = usePersonalizedPolicies(rawPolicies);
+  // 카테고리별 전체 통계 (1593건 등 실제 DB 통계)
+  const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({
+    전체: 0,
+    일자리: 0,
+    주거: 0,
+    '교육·직업훈련': 0,
+    '금융·복지·문화': 0,
+    '참여·기반': 0,
+  });
 
-  // 검색 & 필터 상태
-  const [searchTerm, setSearchTerm] = useState<string>('');
-  const [activeSearch, setActiveSearch] = useState<string>('');
-  const [selectedCategory, setSelectedCategory] = useState<string>('전체');
-  const [selectedRegion, setSelectedRegion] = useState<string>('');
+  // 검색 & 필터 상태 (initialParams 반영)
+  const [searchTerm, setSearchTerm] = useState<string>(() => initialParams?.keyword || '');
+  const [activeSearch, setActiveSearch] = useState<string>(() => initialParams?.keyword || '');
+  const [selectedCategory, setSelectedCategory] = useState<string>(() => initialParams?.category || '전체');
+  const [selectedRegion, setSelectedRegion] = useState<string>(() => initialParams?.region || '');
   const [ageInput, setAgeInput] = useState<string>('');
-  const [selectedEmployment, setSelectedEmployment] = useState<string>('제한없음');
+  const [selectedEmployment, setSelectedEmployment] = useState<string>(() => initialParams?.employment || '제한없음');
   const [selectedSpecial, setSelectedSpecial] = useState<string>('제한없음');
-  const [sortBy, setSortBy] = useState<SortOption>('matchScore');
+  const [sortBy, setSortBy] = useState<SortOption>('latest');
 
   // 북마크 상태 관리 (로컬 Set)
-  const [bookmarkedIds, setBookmarkedIds] = useState<Set<string>>(new Set());
+  const [bookmarkedIds, setBookmarkedIds] = useState<Set<string>>(() => new Set(getLocalBookmarkedIds()));
 
   // 페이지네이션
   const [currentPage, setCurrentPage] = useState<number>(1);
-  const pageSize = 8;
+  const pageSize = 10;
 
-  // 1. Supabase 실데이터 로드
+  // initialParams prop이 변경될 때 상태 동기화
   useEffect(() => {
-    async function loadData() {
-      setLoading(true);
+    if (initialParams) {
+      if (initialParams.category !== undefined) {
+        setSelectedCategory(initialParams.category);
+      }
+      if (initialParams.keyword !== undefined) {
+        setSearchTerm(initialParams.keyword);
+        setActiveSearch(initialParams.keyword);
+      }
+      if (initialParams.employment !== undefined) {
+        setSelectedEmployment(initialParams.employment);
+      }
+      if (initialParams.region !== undefined) {
+        setSelectedRegion(initialParams.region);
+      }
+      setCurrentPage(1);
+    }
+  }, [initialParams]);
+
+  // 1. 카테고리별 전체 카운트 로드 (마운트 시 1회)
+  useEffect(() => {
+    async function loadCounts() {
       try {
-        const data = await getPolicies({ limit: 200 });
-        setRawPolicies(data);
+        const counts = await getCategoryCounts();
+        setCategoryCounts(counts);
       } catch (err) {
-        console.error('Failed to load policies in ExploreView:', err);
-      } finally {
-        setLoading(false);
+        console.error('Failed to load category counts:', err);
       }
     }
-    loadData();
+    loadCounts();
   }, []);
+
+  // 2. 서버 사이드 페이지네이션 데이터 로드
+  const fetchPolicies = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await getPaginatedPolicies({
+        page: currentPage,
+        pageSize,
+        category: selectedCategory !== '전체' ? selectedCategory : undefined,
+        keyword: activeSearch.trim() || undefined,
+        employment: selectedEmployment !== '제한없음' ? selectedEmployment : undefined,
+        sortBy,
+      });
+
+      setRawPolicies(result.policies);
+      setTotalCount(result.totalCount);
+      setTotalPages(result.totalPages);
+    } catch (err) {
+      console.error('Failed to load paginated policies in ExploreView:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [currentPage, pageSize, selectedCategory, activeSearch, selectedEmployment, sortBy]);
+
+  useEffect(() => {
+    fetchPolicies();
+  }, [fetchPolicies]);
+
+  // 사용자 프로필 정보 기반 맞춤 점수 계산
+  const { policies, profile, hasProfile } = usePersonalizedPolicies(rawPolicies);
 
   // data-path 클릭 이벤트 핸들링
   useEffect(() => {
@@ -69,93 +132,6 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
     return () => document.removeEventListener('click', handleDataPath);
   }, [onNavigate]);
 
-  // 카테고리별 실시간 개수 계산
-  const categoryCounts = useMemo(() => {
-    const counts: Record<string, number> = {
-      전체: policies.length,
-      일자리: 0,
-      주거: 0,
-      '교육·직업훈련': 0,
-      '금융·복지·문화': 0,
-      '참여·기반': 0,
-    };
-    policies.forEach((p) => {
-      if (counts[p.category] !== undefined) {
-        counts[p.category] += 1;
-      }
-    });
-    return counts;
-  }, [policies]);
-
-  // 필터링된 정책 목록
-  const filteredPolicies = useMemo(() => {
-    let result = [...policies];
-
-    // 키워드 검색
-    if (activeSearch.trim()) {
-      const q = activeSearch.trim().toLowerCase();
-      result = result.filter(
-        (p) =>
-          p.title.toLowerCase().includes(q) ||
-          p.benefitSummary.toLowerCase().includes(q) ||
-          p.organization.toLowerCase().includes(q)
-      );
-    }
-
-    // 카테고리 필터
-    if (selectedCategory !== '전체') {
-      result = result.filter((p) => p.category === selectedCategory);
-    }
-
-    // 연령 필터
-    if (ageInput) {
-      const ageNum = parseInt(ageInput, 10);
-      if (!isNaN(ageNum)) {
-        result = result.filter((p) => {
-          if (!p.targetAge || p.targetAge.includes('무관') || p.targetAge.includes('전체')) return true;
-          // 연령 추출
-          const numbers = p.targetAge.match(/\d+/g)?.map(Number);
-          if (numbers && numbers.length >= 2) {
-            return ageNum >= numbers[0] && ageNum <= numbers[1];
-          }
-          return true;
-        });
-      }
-    }
-
-    // 취업 상태 필터
-    if (selectedEmployment !== '제한없음') {
-      result = result.filter(
-        (p) =>
-          p.employmentCondition.includes('제한') ||
-          p.employmentCondition.includes('무관') ||
-          p.employmentCondition.includes(selectedEmployment)
-      );
-    }
-
-    // 정렬
-    if (sortBy === 'deadline') {
-      result.sort((a, b) => {
-        if (a.dDay && !b.dDay) return -1;
-        if (!a.dDay && b.dDay) return 1;
-        return 0;
-      });
-    } else if (sortBy === 'popular') {
-      result.sort((a, b) => (b.viewCount || 0) - (a.viewCount || 0));
-    } else if (sortBy === 'matchScore') {
-      result.sort((a, b) => (b.matchScore || 85) - (a.matchScore || 85));
-    }
-
-    return result;
-  }, [policies, activeSearch, selectedCategory, ageInput, selectedEmployment, sortBy]);
-
-  // 페이지네이션 슬라이스
-  const totalPages = Math.max(1, Math.ceil(filteredPolicies.length / pageSize));
-  const paginatedPolicies = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredPolicies.slice(start, start + pageSize);
-  }, [filteredPolicies, currentPage, pageSize]);
-
   // 검색 실행 핸들러
   const handleSearch = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -172,7 +148,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
     setAgeInput('');
     setSelectedEmployment('제한없음');
     setSelectedSpecial('제한없음');
-    setSortBy('matchScore');
+    setSortBy('latest');
     setCurrentPage(1);
   };
 
@@ -181,7 +157,6 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
     e.stopPropagation();
     const isCurrentlyBookmarked = bookmarkedIds.has(policyId);
 
-    // 로컬 상태 즉시 변경
     setBookmarkedIds((prev) => {
       const next = new Set(prev);
       if (isCurrentlyBookmarked) {
@@ -195,6 +170,18 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
     await toggleBookmark('guest_user', policyId);
   };
 
+  // 페이지 변경 핸들러 (상단 스크롤)
+  const handlePageChange = (newPage: number) => {
+    if (newPage < 1 || newPage > totalPages || newPage === currentPage) return;
+    setCurrentPage(newPage);
+    const container = document.getElementById('policy-list-top');
+    if (container) {
+      container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else {
+      window.scrollTo({ top: 300, behavior: 'smooth' });
+    }
+  };
+
   const categories = [
     { key: '전체', label: '전체', icon: '✨', count: categoryCounts['전체'] || 0 },
     { key: '일자리', label: '일자리', icon: '💼', count: categoryCounts['일자리'] || 0 },
@@ -205,35 +192,59 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
   ];
 
   return (
-    <main className="w-full pt-16 bg-surface min-h-[calc(100vh-16rem)] mt-5">
+    <main className="w-full pt-16 sm:pt-20 pb-24 lg:pb-16 bg-[#f8fafc] min-h-[calc(100vh-16rem)] max-w-[1240px] mx-auto px-3.5 sm:px-6 md:px-8">
       <div className="flex flex-col w-full">
         {/* Subtle Ambient Glow Orbs */}
-        <div className="relative w-full max-w-[1200px] mx-auto px-4 md:px-0">
+        <div className="relative w-full mx-auto">
           <div className="absolute top-10 left-1/4 -z-10 w-96 h-96 bg-sky-200/30 rounded-full blur-3xl pointer-events-none"></div>
           <div className="absolute top-32 right-10 -z-10 w-80 h-80 bg-teal-200/30 rounded-full blur-3xl pointer-events-none"></div>
 
           {/* Header Banner */}
-          <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-sky-100/70 via-indigo-50/50 to-teal-50/70 p-6 md:p-8 border border-sky-200/60 shadow-sm shadow-sky-100/50 mb-space-lg">
+          <div className="relative overflow-hidden rounded-2xl sm:rounded-3xl bg-gradient-to-r from-sky-100/70 via-indigo-50/50 to-teal-50/70 p-4 sm:p-6 md:p-8 border border-sky-200/60 shadow-sm shadow-sky-100/50 mb-6">
             <div className="absolute -right-8 -top-10 w-72 h-72 rounded-full bg-teal-200/30 blur-3xl pointer-events-none"></div>
             <div className="absolute left-1/3 -bottom-10 w-64 h-64 rounded-full bg-sky-200/40 blur-3xl pointer-events-none"></div>
 
-            <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-5 sm:gap-6">
               <div className="space-y-2.5">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/80 border border-sky-200/70 shadow-xs text-sky-800 text-xs font-semibold backdrop-blur-md">
                   <span className="flex h-2 w-2 relative">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span>
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-teal-500"></span>
                   </span>
-                  <span>Supabase DB 실시간 정책 탐색 시스템</span>
+                  <span>
+                    {selectedCategory !== '전체'
+                      ? `Supabase [${selectedCategory}] 분야 실시간 정책 필터링`
+                      : 'Supabase 전체 실시간 정책 탐색 시스템'}
+                  </span>
                 </div>
                 <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight leading-snug">
-                  나에게 꼭 맞는 청년 정책 탐색{' '}
-                  <span className="text-sky-600 underline decoration-sky-300 decoration-wavy underline-offset-4">
-                    {loading ? '조회중...' : `${filteredPolicies.length}건`}
-                  </span>
+                  {selectedCategory !== '전체' ? (
+                    <>
+                      <span className="text-sky-600">[{selectedCategory}]</span> 분야 청년 정책{' '}
+                      <span className="text-sky-600 underline decoration-sky-300 decoration-wavy underline-offset-4">
+                        {loading ? '조회중...' : `${totalCount.toLocaleString()}건`}
+                      </span>
+                    </>
+                  ) : activeSearch.trim() ? (
+                    <>
+                      <span className="text-sky-600">"{activeSearch.trim()}"</span> 검색 결과{' '}
+                      <span className="text-sky-600 underline decoration-sky-300 decoration-wavy underline-offset-4">
+                        {loading ? '조회중...' : `${totalCount.toLocaleString()}건`}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      나에게 꼭 맞는 청년 정책 탐색{' '}
+                      <span className="text-sky-600 underline decoration-sky-300 decoration-wavy underline-offset-4">
+                        {loading ? '조회중...' : `총 ${totalCount.toLocaleString()}건`}
+                      </span>
+                    </>
+                  )}
                 </h1>
                 <p className="text-slate-600 text-sm md:text-base leading-relaxed">
-                  온통청년 및 공공데이터포털 복지로 API에서 동기화된 총 {policies.length}건의 실시간 정책을 검색·필터링합니다.
+                  {selectedCategory !== '전체'
+                    ? `온통청년 및 공공데이터포털 복지로 API에서 동기화된 [${selectedCategory}] 분야의 실시간 정책 ${totalCount.toLocaleString()}건을 검색·필터링하여 보여줍니다.`
+                    : `온통청년 및 공공데이터포털 복지로 API에서 동기화된 총 ${totalCount.toLocaleString()}건의 실시간 정책을 검색·페이지네이션으로 빠르게 탐색합니다.`}
                 </p>
               </div>
 
@@ -247,12 +258,14 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
                 <div className="pr-1">
                   <div className="flex items-center gap-1.5 mb-0.5">
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                    <span className="text-xs font-medium text-slate-500">검색 조건 매칭</span>
+                    <span className="text-xs font-medium text-slate-500">
+                      {selectedCategory !== '전체' ? `${selectedCategory} 정책` : '전체 정책'}
+                    </span>
                   </div>
                   <div className="flex items-baseline gap-1">
-                    <span className="text-xs font-medium text-slate-500 mr-1">조회 결과</span>
+                    <span className="text-xs font-medium text-slate-500 mr-1">검색 결과</span>
                     <span className="text-2xl md:text-3xl font-extrabold text-slate-900 tracking-tight">
-                      {filteredPolicies.length}
+                      {totalCount.toLocaleString()}
                     </span>
                     <span className="text-sm font-bold text-sky-600">건</span>
                   </div>
@@ -278,8 +291,9 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
                   onClick={() => {
                     setSearchTerm('');
                     setActiveSearch('');
+                    setCurrentPage(1);
                   }}
-                  className="text-slate-400 hover:text-slate-600 text-xs px-2 py-1"
+                  className="text-slate-400 hover:text-slate-600 text-xs px-2 py-1 cursor-pointer"
                 >
                   ✕
                 </button>
@@ -365,42 +379,14 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
                               : 'border border-slate-200 bg-white hover:bg-sky-50 text-slate-700'
                               }`}
                           >
-                            {cat.icon} {cat.label} ({cat.count})
+                            {cat.icon} {cat.label} ({cat.count > 0 ? cat.count.toLocaleString() : '-'})
                           </button>
                         );
                       })}
                     </div>
                   </div>
 
-                  {/* 2. Age Filter */}
-                  <div className="flex flex-col md:flex-row items-start md:items-center gap-3 pb-2.5 border-b border-dashed border-sky-100">
-                    <label className="w-24 font-bold text-slate-900 text-sm flex-shrink-0">대상 연령</label>
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className="text-slate-600">만</span>
-                      <input
-                        className="w-24 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-center text-xs focus:outline-none focus:border-sky-500 font-bold"
-                        placeholder="예: 25"
-                        type="number"
-                        value={ageInput}
-                        onChange={(e) => {
-                          setAgeInput(e.target.value);
-                          setCurrentPage(1);
-                        }}
-                      />
-                      <span className="text-slate-600">세 기준 필터링</span>
-                      {ageInput && (
-                        <button
-                          type="button"
-                          onClick={() => setAgeInput('')}
-                          className="text-xs text-sky-600 hover:underline ml-2"
-                        >
-                          연령제한 해제
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* 3. Employment Status */}
+                  {/* 2. Employment Status */}
                   <div className="flex flex-col md:flex-row items-start md:items-center gap-3">
                     <label className="w-24 font-bold text-slate-900 text-sm flex-shrink-0">취업상태</label>
                     <div className="flex flex-wrap gap-2 flex-1">
@@ -442,36 +428,56 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
           </section>
 
           {/* Policy Cards Grid Section */}
-          <section className="space-y-space-md pb-space-xl">
+          <section id="policy-list-top" className="space-y-space-md pb-space-xl">
             {/* Controls & Sorting Bar */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
               <div className="flex items-baseline gap-2">
                 <span className="text-sm font-semibold text-slate-700">검색 결과 정책</span>
-                <span className="text-xl font-extrabold text-sky-600">{filteredPolicies.length}</span>
-                <span className="text-xs text-slate-500">건</span>
+                <span className="text-xl font-extrabold text-sky-600">{totalCount.toLocaleString()}</span>
+                <span className="text-xs text-slate-500">건 (페이지 {currentPage} / {totalPages})</span>
               </div>
 
               {/* Sort Options */}
               <div className="bg-white rounded-xl p-1 flex items-center shadow-xs border border-slate-200 text-xs">
                 <button
-                  onClick={() => setSortBy('matchScore')}
-                  className={`px-3 py-1.5 rounded-lg font-bold transition-all ${sortBy === 'matchScore' ? 'bg-sky-50 text-sky-700 font-bold' : 'text-slate-600 hover:bg-slate-100'
+                  onClick={() => {
+                    setSortBy('latest');
+                    setCurrentPage(1);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${sortBy === 'latest' ? 'bg-sky-50 text-sky-700 font-bold' : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  type="button"
+                >
+                  최신순
+                </button>
+                <button
+                  onClick={() => {
+                    setSortBy('matchScore');
+                    setCurrentPage(1);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${sortBy === 'matchScore' ? 'bg-sky-50 text-sky-700 font-bold' : 'text-slate-600 hover:bg-slate-100'
                     }`}
                   type="button"
                 >
                   적합도순
                 </button>
                 <button
-                  onClick={() => setSortBy('deadline')}
-                  className={`px-3 py-1.5 rounded-lg font-bold transition-all ${sortBy === 'deadline' ? 'bg-sky-50 text-sky-700 font-bold' : 'text-slate-600 hover:bg-slate-100'
+                  onClick={() => {
+                    setSortBy('deadline');
+                    setCurrentPage(1);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${sortBy === 'deadline' ? 'bg-sky-50 text-sky-700 font-bold' : 'text-slate-600 hover:bg-slate-100'
                     }`}
                   type="button"
                 >
                   마감임박순
                 </button>
                 <button
-                  onClick={() => setSortBy('popular')}
-                  className={`px-3 py-1.5 rounded-lg font-bold transition-all ${sortBy === 'popular' ? 'bg-sky-50 text-sky-700 font-bold' : 'text-slate-600 hover:bg-slate-100'
+                  onClick={() => {
+                    setSortBy('popular');
+                    setCurrentPage(1);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${sortBy === 'popular' ? 'bg-sky-50 text-sky-700 font-bold' : 'text-slate-600 hover:bg-slate-100'
                     }`}
                   type="button"
                 >
@@ -483,7 +489,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
             {/* Loading State */}
             {loading ? (
               <div className="flex flex-col gap-4">
-                {[1, 2, 3, 4].map((n) => (
+                {[1, 2, 3, 4, 5].map((n) => (
                   <div key={n} className="bg-white rounded-2xl p-5 border border-slate-200 animate-pulse space-y-3">
                     <div className="flex gap-2">
                       <div className="w-16 h-5 bg-slate-200 rounded"></div>
@@ -494,14 +500,14 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
                   </div>
                 ))}
               </div>
-            ) : filteredPolicies.length === 0 ? (
+            ) : policies.length === 0 ? (
               <div className="bg-white rounded-2xl p-16 text-center border border-slate-200 text-slate-500 space-y-3">
                 <p className="text-3xl">🔍</p>
                 <p className="text-base font-bold text-slate-800">일치하는 정책이 없습니다</p>
                 <p className="text-xs text-slate-500">검색어나 선택된 상세 필터 조건을 변경해 보세요.</p>
                 <button
                   onClick={handleResetFilters}
-                  className="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs shadow-sm transition-all"
+                  className="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs shadow-sm transition-all cursor-pointer"
                 >
                   필터 전체 초기화
                 </button>
@@ -509,7 +515,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
             ) : (
               /* Policy Cards Rows */
               <div className="flex flex-col gap-4">
-                {paginatedPolicies.map((policy) => {
+                {policies.map((policy) => {
                   const isBookmarked = bookmarkedIds.has(policy.id);
                   const badgeColor =
                     policy.category === '주거'
@@ -611,29 +617,44 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
               </div>
             )}
 
-            {/* Pagination Component */}
+            {/* Server-side Pagination Component */}
             {totalPages > 1 && (
-              <nav aria-label="페이지 네비게이션" className="pt-6 flex items-center justify-center gap-1.5">
+              <nav aria-label="페이지 네비게이션" className="pt-8 pb-4 flex flex-wrap items-center justify-center gap-1.5 select-none">
+                {/* First Page */}
                 <button
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                  className="w-9 h-9 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center shadow-xs transition-colors cursor-pointer"
+                  onClick={() => handlePageChange(1)}
+                  disabled={currentPage === 1 || loading}
+                  className="px-2.5 h-9 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center shadow-xs transition-colors cursor-pointer text-xs font-bold"
                   type="button"
+                  title="첫 페이지로"
                 >
-                  ◀
+                  ⏮
                 </button>
 
+                {/* Prev Page */}
+                <button
+                  onClick={() => handlePageChange(currentPage - 1)}
+                  disabled={currentPage === 1 || loading}
+                  className="px-3 h-9 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center shadow-xs transition-colors cursor-pointer text-xs font-bold"
+                  type="button"
+                  title="이전 페이지"
+                >
+                  ◀ 이전
+                </button>
+
+                {/* Page Numbers */}
                 {Array.from({ length: totalPages }, (_, i) => i + 1)
                   .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 2)
                   .map((page, idx, arr) => (
                     <React.Fragment key={page}>
                       {idx > 0 && arr[idx - 1] !== page - 1 && (
-                        <span className="px-1 text-slate-400">...</span>
+                        <span className="px-2 text-slate-400 font-bold">...</span>
                       )}
                       <button
-                        onClick={() => setCurrentPage(page)}
-                        className={`w-9 h-9 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer ${currentPage === page
-                          ? 'bg-sky-600 text-white shadow-sky-300'
+                        onClick={() => handlePageChange(page)}
+                        disabled={loading}
+                        className={`min-w-[36px] h-9 px-3 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer ${currentPage === page
+                          ? 'bg-sky-600 text-white shadow-sky-300 ring-2 ring-sky-300'
                           : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
                           }`}
                         type="button"
@@ -643,13 +664,26 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ onNavigate }) => {
                     </React.Fragment>
                   ))}
 
+                {/* Next Page */}
                 <button
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage === totalPages}
-                  className="w-9 h-9 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center shadow-xs transition-colors cursor-pointer"
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  disabled={currentPage === totalPages || loading}
+                  className="px-3 h-9 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center shadow-xs transition-colors cursor-pointer text-xs font-bold"
                   type="button"
+                  title="다음 페이지"
                 >
-                  ▶
+                  다음 ▶
+                </button>
+
+                {/* Last Page */}
+                <button
+                  onClick={() => handlePageChange(totalPages)}
+                  disabled={currentPage === totalPages || loading}
+                  className="px-2.5 h-9 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center shadow-xs transition-colors cursor-pointer text-xs font-bold"
+                  type="button"
+                  title="마지막 페이지로"
+                >
+                  ⏭
                 </button>
               </nav>
             )}

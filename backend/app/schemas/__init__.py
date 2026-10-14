@@ -21,7 +21,10 @@ from app.schemas.bookmark import BookmarkToggleRequest, BookmarkToggleResponseDa
 from app.schemas.notification import (
     NotificationCreate,
     NotificationResponse,
-    NotificationListResponseData
+    NotificationListResponseData,
+    PolicyAlertApplyRequest,
+    PolicyAlertApplyResponseData,
+    PolicyAlertChannelInfo
 )
 
 __all__ = [
@@ -46,5 +49,7 @@ __all__ = [
     "NotificationCreate",
     "NotificationResponse",
     "NotificationListResponseData",
+    "PolicyAlertApplyRequest",
+    "PolicyAlertApplyResponseData",
+    "PolicyAlertChannelInfo",
 ]
-

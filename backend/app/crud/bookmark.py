@@ -1,18 +1,20 @@
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
 
 from app.models.user import UserBookmark
 from app.models.policy import Policy
 from app.crud.user import get_or_create_default_user, DEFAULT_USER_ID
+from app.schemas.notification import PolicyAlertApplyRequest
 
 async def toggle_bookmark(
     db: AsyncSession,
     policy_id: str,
-    user_id: str = DEFAULT_USER_ID
+    user_id: str = DEFAULT_USER_ID,
+    subscribe_alert: bool = False
 ) -> Tuple[bool, int]:
     # 유저 확인
-    await get_or_create_default_user(db, user_id)
+    user = await get_or_create_default_user(db, user_id)
 
     # 기존 북마크 조회
     query = select(UserBookmark).where(
@@ -31,6 +33,20 @@ async def toggle_bookmark(
         is_bookmarked = True
 
     await db.commit()
+
+    # 알람 신청 옵션이 켜져 있거나 관심 저장 시 알람 신청 처리
+    if is_bookmarked and subscribe_alert:
+        from app.crud.notification import apply_policy_alert
+        try:
+            await apply_policy_alert(
+                db=db,
+                request=PolicyAlertApplyRequest(
+                    policyId=policy_id,
+                    userId=user_id
+                )
+            )
+        except Exception:
+            pass
 
     # 전체 북마크 개수 계산
     count_query = select(func.count(UserBookmark.policy_id)).where(UserBookmark.user_id == user_id)

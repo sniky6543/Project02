@@ -16,49 +16,6 @@ if sys.stdout.encoding != 'utf-8':
 
 # 1. 환경변수 로드 (.env 파일 읽기)
 load_dotenv()
-db_url = os.getenv("SUPABASE_URL") or os.getenv("DATABASE_URL")
-
-# 대괄호 [비밀번호] 형태 자동 보정 및 asyncpg 접두사 보정
-if db_url:
-    # [password] 형태의 불필요한 대괄호 제거
-    if "@" in db_url and ":[" in db_url and "]@" in db_url:
-        db_url = db_url.replace(":[", ":").replace("]@", "@")
-    db_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
-
-# 2. 클라우드 DB 연결
-if db_url and not db_url.startswith("http"):
-    try:
-        engine = create_engine(db_url)
-        Base = declarative_base()
-
-        # 3. 테이블 모델 정의 (예: 팀원 정보)
-        class TeamMember(Base):
-            __tablename__ = 'team_members'
-            id = Column(Integer, primary_key=True)
-            name = Column(String)
-            role = Column(String)
-
-        # 4. DB에 테이블 생성 (클라우드에 최초 1회 생성됨)
-        Base.metadata.create_all(engine)
-
-        # 5. 세션 열기 및 데이터 저장
-        Session = sessionmaker(bind=engine)
-        session = Session()
-
-        # 새로운 데이터 추가 (INSERT)
-        new_member = TeamMember(name='신입개발자', role='프론트엔드')
-        session.add(new_member)
-        session.commit()
-        print("클라우드 DB에 데이터 저장 완료!")
-
-        # 6. 저장된 데이터 모두 불러와서 확인 (SELECT)
-        members = session.query(TeamMember).all()
-        for m in members:
-            print(f"ID: {m.id}, 이름: {m.name}, 역할: {m.role}")
-
-        session.close()
-    except Exception as e:
-        print(f"클라우드 DB 연결/저장 안내: {e}")
 
 # ==============================================================================
 # FastAPI 애플리케이션 및 라우터 설정

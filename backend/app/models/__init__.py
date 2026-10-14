@@ -4,6 +4,7 @@ from app.models.user import User, UserBookmark
 from app.models.recommendation import AIRecommendationLog
 from app.models.notification import NotificationLog
 from app.models.unified_policy import UnifiedPolicy
+from app.models.news import PolicyNews
 
 __all__ = [
     "Base",
@@ -14,6 +15,8 @@ __all__ = [
     "AIRecommendationLog",
     "NotificationLog",
     "UnifiedPolicy",
+    "PolicyNews",
 ]
+
 
 

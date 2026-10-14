@@ -16,6 +16,7 @@ export interface PolicyItem {
   viewCount?: number;
   isBookmarked?: boolean;
   source?: string;
+  keywords?: string[] | string;
 }
 
 export interface PolicyDetail extends PolicyItem {
@@ -23,6 +24,7 @@ export interface PolicyDetail extends PolicyItem {
   applyPeriod?: string;
   bizPeriod?: string;
   summary?: string;
+  keywords?: string[] | string;
   benefit: {
     amount: string;
     totalMax: string;
@@ -55,4 +57,42 @@ export interface PolicyFilterParams {
   sortBy?: 'latest' | 'popular' | 'deadline' | 'matchScore';
   page?: number;
   limit?: number;
+  pageSize?: number;
 }
+
+export interface PaginatedPolicyResult {
+  policies: PolicyItem[];
+  totalCount: number;
+  totalPages: number;
+  currentPage: number;
+  pageSize: number;
+}
+
+export interface PolicyNewsItem {
+  id: string;
+  policyId?: string;
+  policyName: string;
+  title: string;
+  publisher: string;
+  url: string;
+  publishedAt: string;
+  summary3Lines: string;
+  keywords: string[];
+}
+
+export interface NewsFilterParams {
+  keyword?: string;
+  sortBy?: 'latest' | 'popular' | 'match';
+  page?: number;
+  pageSize?: number;
+}
+
+export interface PaginatedPolicyNewsResult {
+  news: PolicyNewsItem[];
+  totalCount: number;
+  totalPages: number;
+  currentPage: number;
+  pageSize: number;
+}
+
+

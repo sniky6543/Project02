@@ -47,7 +47,7 @@ export const EMPTY_PROFILE_SETTINGS: ProfileSettingsData = {
   householdType: '',
   regionCity: '서울특별시',
   regionDistrict: '마포구 (서교동/상수동)',
-  aiProvider: 'OPENAI',
+  aiProvider: 'Router API',
   apiKeys: {
     OPENAI: '',
     OLLAMA: '',
@@ -76,7 +76,7 @@ export const DEMO_PROFILE_SETTINGS: ProfileSettingsData = {
   householdType: '1인가구(단독)',
   regionCity: '서울특별시',
   regionDistrict: '마포구 (서교동/상수동)',
-  aiProvider: 'OPENAI',
+  aiProvider: 'Router API',
   apiKeys: {
     OPENAI: '',
     OLLAMA: '',
@@ -117,7 +117,7 @@ export const loadProfileSettings = (): ProfileSettingsData => {
       householdType: typeof parsed.householdType === 'string' ? parsed.householdType : '',
       regionCity: typeof parsed.regionCity === 'string' && parsed.regionCity ? parsed.regionCity : '서울특별시',
       regionDistrict: typeof parsed.regionDistrict === 'string' && parsed.regionDistrict ? parsed.regionDistrict : '마포구 (서교동/상수동)',
-      aiProvider: parsed.aiProvider === 'OLLAMA' || parsed.aiProvider === 'Router API' ? parsed.aiProvider : 'OPENAI',
+      aiProvider: parsed.aiProvider === 'OPENAI' || parsed.aiProvider === 'OLLAMA' ? parsed.aiProvider : 'Router API',
       apiKeys: {
         OPENAI: parsed.apiKeys?.OPENAI || '',
         OLLAMA: parsed.apiKeys?.OLLAMA || '',

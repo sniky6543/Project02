@@ -46,6 +46,7 @@ classDiagram
 | **`target_condition`**| `String` | 선택 | 소득, 거주지, 취업상태 등 지원 자격 요건 | `"중위소득 60% 이하 (원가구 100% 이하)"` |
 | **`apply_method`** | `String` | 선택 | 신청 방법 및 접수 절차 | `"복지로 웹사이트 또는 행정복지센터 방문"` |
 | **`apply_url`** | `String` | 선택 | 신청 페이지 바로가기 링크 (URL) | `"https://www.bokjiro.go.kr"` |
+| **`keywords`** | `Array[String]` / `String` | 선택 | 정책 핵심 검색 및 AI 분류 키워드 (3개) | `["월세지원", "주거안정", "무주택청년"]`<br>`"월세지원, 주거안정, 무주택청년"` |
 | **`period_sdate`** | `String` | 선택 | 정책 신청/시작일 (YYYYMMDD 또는 YYYY-MM-DD, 상시 등) | `"20260727"`, `"2026-07-27"`, `"상시 접수"` |
 | **`period_edate`** | `String` | 선택 | 정책 마감/종료일 (YYYYMMDD 또는 YYYY-MM-DD, 상시/예산소진시 등) | `"20260812"`, `"2026-08-12"`, `"20261231"`, `"연중 사업"` |
 
@@ -131,3 +132,36 @@ classDiagram
    - `region`: 지자체/지역별 정책 구분 (`"전국"`, `"서울"`, `"부산"` 등)
    - `views_count`: 조회수 / 북마크수
    - `is_active`: 현재 접수 진행 여부 (`true` / `false`)
+
+---
+
+## 6. 알림 및 메시지 발송 기록 스키마 (`notification_logs`)
+
+텔레그램 또는 이메일로 정책 알림을 발송하거나 테스트를 진행할 때, 발송된 **내용(content)**, **보낸 아이디/이메일(recipient_id)**, **발송 일시(sent_at)**를 DB에 저장합니다.
+
+```mermaid
+classDiagram
+    class NotificationLog {
+        +Integer no (PK)
+        +String send_method
+        +String recipient_id
+        +Text content
+        +DateTime sent_at
+        +String user_id
+        +String policy_id
+        +String status
+        +DateTime created_at
+    }
+```
+
+| 필드명 (Column) | 데이터 타입 | 제약 조건 | 설명 |
+| :--- | :---: | :---: | :--- |
+| **`no`** | `INTEGER / SERIAL` | `PRIMARY KEY`, `AUTO_INCREMENT` | 고유 발송 식별 번호 (PK) |
+| **`send_method`** | `VARCHAR(20)` | `NOT NULL`, `INDEX` | 발송 수단 (`telegram` / `email` / `system`) |
+| **`recipient_id`** | `VARCHAR(255)` | `NOT NULL`, `INDEX` | 수신자 식별자 (텔레그램 ID 또는 이메일 주소) |
+| **`content`** | `TEXT` | `NOT NULL` | 발송된 알림 메시지 본문 내용 |
+| **`sent_at`** | `TIMESTAMP WITH TIME ZONE` | `NOT NULL`, `INDEX` | 발송 완료 일시 (날짜/시간) |
+| **`user_id`** | `VARCHAR(50)` | `NULLABLE`, `FK -> users.id` | 연계 사용자 ID |
+| **`policy_id`** | `VARCHAR(50)` | `NULLABLE`, `FK -> policies.id` | 연계 정책 ID |
+| **`status`** | `VARCHAR(20)` | `DEFAULT 'SENT'` | 발송 상태 (`SENT`, `REGISTERED`, `SUCCESS`, `FAILED`) |
+

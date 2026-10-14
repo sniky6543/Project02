@@ -18,13 +18,15 @@ load_dotenv()
 
 ontong_key = os.getenv("ONTONG_API_KEY")
 data_key = os.getenv("DATA_API_KEY")
+openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
+openrouter_model = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
 
 # 오늘 기준일 (YYYYMMDD) - 실행 시점 기준으로 자동 생성
 TODAY = datetime.now().strftime("%Y%m%d")
 
 
 # --------------------------------------------------------------------------
-# 0. 날짜 추출 유틸리티 함수
+# 0. 날짜 및 키워드 추출 유틸리티 함수
 # --------------------------------------------------------------------------
 def extract_dates(text):
     """
@@ -35,18 +37,116 @@ def extract_dates(text):
         return []
     dates = []
     
-    # 1. YYYY-MM-DD, YYYY.MM.DD, YYYY/MM/DD, YYYY. M. D 등 구분자 있는 형식 추출
     pattern_delim = r"(\d{4})[\.\-\/]\s*(\d{1,2})[\.\-\/]\s*(\d{1,2})"
     for y, m, d in re.findall(pattern_delim, text):
         dates.append(f"{y}{int(m):02d}{int(d):02d}")
         
-    # 2. 8자리 연속 숫자 (YYYYMMDD) 추출
     pattern_raw = r"(?<!\d)(20\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01]))(?!\d)"
     for d in re.findall(pattern_raw, text):
         if d not in dates:
             dates.append(d)
             
     return sorted(dates)
+
+
+def extract_keywords_from_item(item: dict, title: str, summary: str = "", support: str = "", category: str = "") -> list:
+    """
+    1) API 원본 데이터에 정책 키워드가 존재하는지 확인 (plcyKeywrdCn, srchKywd, plcyKywd, keywords 등)
+    2) 없거나 비어있는 경우 OpenRouter (nvidia/nemotron-3-ultra-550b-a55b:free) AI 모델로 키워드 3개 추출
+    3) AI 호출 불가 또는 지연 시 스마트 룰 기반으로 3개 추출하여 반환
+    """
+    # 1. API 원본 키워드 필드 확인
+    raw_kw = (
+        item.get("plcyKeywrdCn") or 
+        item.get("srchKywd") or 
+        item.get("plcyKywd") or 
+        item.get("keywords") or 
+        ""
+    )
+    if isinstance(raw_kw, list) and len(raw_kw) > 0:
+        cleaned_list = [str(k).strip().replace("#", "") for k in raw_kw if str(k).strip()]
+        if len(cleaned_list) >= 3:
+            return cleaned_list[:3]
+        elif cleaned_list:
+            raw_kw = ", ".join(cleaned_list)
+
+    if isinstance(raw_kw, str) and raw_kw.strip():
+        # 쉼표, 슬래시, 해시태그 등으로 분리
+        tokens = [t.strip().replace("#", "") for t in re.split(r"[,/|#\s]+", raw_kw) if len(t.strip()) >= 2]
+        if len(tokens) >= 3:
+            return tokens[:3]
+
+    # 2. 키워드가 없는 경우 AI (OpenRouter) 호출 시도
+    if openrouter_key and not openrouter_key.startswith("sk-or-v1-your"):
+        try:
+            resp = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {openrouter_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": openrouter_model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "당신은 대한민국 청년 정책 메타데이터 전문가입니다. 주어진 정책 정보를 읽고 핵심 검색 키워드 3개를 JSON 배열로 출력하세요. 예: [\"월세지원\", \"주거안정\", \"무주택청년\"]"
+                        },
+                        {
+                            "role": "user",
+                            "content": f"[정책명]: {title}\n[카테고리]: {category}\n[지원내용]: {support[:300]}\n\n핵심 키워드 3개 JSON 배열:"
+                        }
+                    ],
+                    "temperature": 0.1
+                },
+                timeout=4
+            )
+            if resp.status_code == 200:
+                res_data = resp.json()
+                content = res_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                match = re.search(r"\[[\s\S]*?\]", content)
+                if match:
+                    parsed = json.loads(match.group(0))
+                    if isinstance(parsed, list) and len(parsed) >= 1:
+                        clean_kws = [str(k).strip().replace("#", "") for k in parsed if str(k).strip()][:3]
+                        if len(clean_kws) == 3:
+                            return clean_kws
+        except Exception:
+            pass
+
+    # 3. 스마트 룰 기반 키워드 3개 추출 (Fallback)
+    candidates = []
+    combined = f"{title} {category} {summary} {support}".lower()
+
+    pool = [
+        ("월세", "월세지원"), ("전세", "전세보증"), ("주거", "주거안정"), ("임대", "공공임대"),
+        ("취업", "취업지원"), ("구직", "구직활동"), ("인턴", "일경험인턴"), ("창업", "청년창업"),
+        ("자산", "자산형성"), ("도약", "청년도약"), ("적금", "청년적금"), ("교통", "교통비지원"),
+        ("패스", "K패스"), ("마음", "심리지원"), ("역량", "역량강화"), ("교육", "직업훈련"),
+        ("학자금", "학자금지원"), ("문화", "문화예술"), ("소득세", "세제감면"), ("중소기업", "중소기업청년")
+    ]
+
+    for trigger, kw in pool:
+        if trigger in combined and kw not in candidates:
+            candidates.append(kw)
+            if len(candidates) == 3:
+                return candidates
+
+    nouns = [w for w in re.sub(r"[^\w\s]", " ", title).split() if len(w) >= 2 and w not in ["청년", "지원", "사업", "안내", "특별", "맞춤"]]
+    for n in nouns:
+        if n not in candidates:
+            candidates.append(n)
+            if len(candidates) == 3:
+                return candidates
+
+    defaults = ["청년지원", "생활안정", "맞춤혜택"]
+    for df in defaults:
+        if df not in candidates:
+            candidates.append(df)
+        if len(candidates) == 3:
+            break
+
+    return candidates[:3]
 
 
 # --------------------------------------------------------------------------
@@ -65,14 +165,12 @@ def classify_policy_status(policy, today=None):
     biz_end = (policy.get("bizPrdEndYmd") or "").strip()
     biz_etc = (policy.get("bizPrdEtcCn") or "").strip()
 
-    # 상시/연중/예산소진시 등 계속 진행 키워드 확인
     continuous_keywords = ["상시", "연중", "소진", "계속", "수시", "별도", "상시모집", "상시접수", "예산", "소진시", "마감시"]
     is_continuous = any(k in aply_ymd or k in biz_etc or k in biz_end for k in continuous_keywords)
 
     aply_dates = extract_dates(aply_ymd)
     biz_dates = extract_dates(f"{biz_start} {biz_end}")
 
-    # 1. 신청 기간(aplyYmd) 기준 분석
     if aply_dates:
         start_date = aply_dates[0]
         end_date = aply_dates[-1]
@@ -85,7 +183,6 @@ def classify_policy_status(policy, today=None):
             return "진행중", f"상시/수시진행(~{end_date})"
         return "진행중", f"신청진행중(~{end_date})"
 
-    # 2. 사업 기간(bizPrdBgngYmd, bizPrdEndYmd) 기준 분석
     if biz_dates:
         biz_s = biz_dates[0]
         biz_e = biz_dates[-1]
@@ -98,7 +195,6 @@ def classify_policy_status(policy, today=None):
             return "진행중", f"상시/수시사업(~{biz_e})"
         return "진행중", f"사업진행중(~{biz_e})"
 
-    # 3. 날짜 명시가 없는 경우 상시 모집/진행으로 분류
     return "진행중", "상시 모집/진행"
 
 
@@ -134,7 +230,6 @@ def fetch_ontong_valid_policies(api_key, max_pages=None):
         }
         
         items = None
-        # 재시도 메커니즘 (네트워크 일시 오류 대비 최대 3회)
         for attempt in range(1, 4):
             try:
                 r = requests.get(url, params=params, headers=headers, timeout=12)
@@ -155,24 +250,21 @@ def fetch_ontong_valid_policies(api_key, max_pages=None):
                 time.sleep(1)
                 
         if not items:
-            # 더 이상 데이터가 없으면 종료
             break
             
         page_valid = 0
-        page_expired = 0
         for item in items:
             status, status_msg = classify_policy_status(item, TODAY)
             
-            # '마감'된 정책은 제외하고, '진행중'(상시 포함) 및 '예정'인 정책만 수집
             if status == "마감":
                 expired_cnt += 1
-                page_expired += 1
                 continue
                 
             plcy_no = item.get("plcyNo")
             desc = " ".join((item.get("plcyExplnCn") or "").split())
             support = " ".join((item.get("plcySprtCn") or "").split())
             organ = item.get("sprvsnInstCdNm") or item.get("operInstCdNm") or "정부부처/지자체"
+            title = item.get("plcyNm", "제목 없음")
             
             min_age = item.get("sprtTrgtMinAge")
             max_age = item.get("sprtTrgtMaxAge")
@@ -187,16 +279,21 @@ def fetch_ontong_valid_policies(api_key, max_pages=None):
             mclsf = item.get("mclsfNm", "") or ""
             category_str = f"{lclsf} > {mclsf}".strip(" >")
 
+            # 정책 키워드 추출 (API 원본 확인 후 없으면 AI/룰 3개 추출)
+            keywords = extract_keywords_from_item(item, title, desc, support, category_str)
+
             valid_list.append({
                 "id": f"ONTONG_{plcy_no}",
                 "source": "온통청년 (youthcenter.go.kr)",
                 "status": status,
                 "status_detail": status_msg,
-                "title": item.get("plcyNm", "제목 없음"),
+                "title": title,
                 "category": category_str,
                 "organization": organ,
                 "summary": desc,
                 "support_content": support,
+                "keywords": keywords,
+                "keywords_str": ", ".join(keywords),
                 "target_age": age_str,
                 "target_condition": item.get("ptcpPrpTrgtCn") or item.get("addAplyQlfcCndCn") or "해당 연령 청년 대상",
                 "apply_period": apply_period,
@@ -210,7 +307,7 @@ def fetch_ontong_valid_policies(api_key, max_pages=None):
         print(f"  📄 [페이지 {page:2d}{tot_p_str}] 수집 {len(items)}건 -> 유효 {page_valid}건 (누적 유효: {len(valid_list)}건 / 마감제외: {expired_cnt}건)")
         
         page += 1
-        time.sleep(0.05)  # API 서버 부하 방지
+        time.sleep(0.05)
             
     print(f"\n  ✅ 온통청년 API 수집 완료: 총 {len(valid_list)}건 유효 정책 수집 (마감 제외: {expired_cnt}건)")
     return valid_list
@@ -225,7 +322,6 @@ def fetch_data_go_kr_valid_benefits(api_key):
     
     current_year = datetime.now().year
     
-    # 대한민국 대표 상시/연중 유효 청년 복지 혜택 카탈로그
     public_catalog = [
         ("청년월세 한시 특별지원", "주거 > 월세지원", "국토교통부", "부모와 별도 거주하는 무주택 청년 대상 실제 납부 임차료 월 최대 20만원(최대 12개월) 지원", "월 최대 20만원 지원 (12회 분할 지급)", "만 19세~34세 무주택 청년", "중위소득 60% 이하 (원가구 100% 이하)", "복지로 웹사이트 또는 행정복지센터 방문", "https://www.bokjiro.go.kr", "진행중", "상시 접수 중"),
         ("청년도약계좌", "금융 > 자산형성", "금융위원회", "청년의 중장기 자산형성을 지원하기 위한 정책금융상품으로 매월 최대 70만원 저축 시 정부기여금 및 이자 비과세 혜택", "정부기여금 월 최대 3.3만원 매칭 지원 및 이자소득 비과세", "만 19세~34세", "개인소득 7,500만원 이하 & 가구소득 중위 250% 이하", "취급 은행 앱(App) 비대면 신청", "https://www.kinfa.or.kr", "진행중", "매월 초 가입신청 접수"),
@@ -247,6 +343,7 @@ def fetch_data_go_kr_valid_benefits(api_key):
     results = []
     for idx, item in enumerate(public_catalog, start=1):
         title, cat, organ, summary, support, age, cond, method, url, status, s_detail = item
+        keywords = extract_keywords_from_item({}, title, summary, support, cat)
         results.append({
             "id": f"DATA_GO_{idx:03d}",
             "source": "공공데이터포털 (data.go.kr)",
@@ -257,6 +354,8 @@ def fetch_data_go_kr_valid_benefits(api_key):
             "organization": organ,
             "summary": summary,
             "support_content": support,
+            "keywords": keywords,
+            "keywords_str": ", ".join(keywords),
             "target_age": age,
             "target_condition": cond,
             "apply_period": "상시 접수 / 연중 사업",
@@ -314,6 +413,10 @@ def merge_and_deduplicate_policies(ontong_list, public_list):
             if not existing_policy.get("apply_url") or "youthcenter" in existing_policy["apply_url"]:
                 if p.get("apply_url"):
                     existing_policy["apply_url"] = p["apply_url"]
+            # 키워드 병합
+            if not existing_policy.get("keywords") and p.get("keywords"):
+                existing_policy["keywords"] = p["keywords"]
+                existing_policy["keywords_str"] = p.get("keywords_str", ", ".join(p["keywords"]))
             print(f"  💡 중복 정책 병합: '{p['title']}' <-> '{existing_policy['title']}'")
         else:
             seen_titles[norm_key] = p
@@ -329,11 +432,12 @@ def merge_and_deduplicate_policies(ontong_list, public_list):
 # --------------------------------------------------------------------------
 def main():
     now = datetime.now()
-    file_timestamp = now.strftime("%Y%m%d_%H%M")  # 예: 20260929_1031
+    file_timestamp = now.strftime("%Y%m%d_%H%M")
     
     print("=" * 75)
-    print("🚀 청년 정책·혜택 유효 데이터 수집 & 중복 제거 파이프라인 가동")
+    print("🚀 청년 정책·혜택 유효 데이터 수집 & AI 키워드 추출 파이프라인 가동")
     print(f"   기준일자: {TODAY} | 실행시각: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"   AI 모델  : OpenRouter ({openrouter_model})")
     print("=" * 75)
 
     # 1. 온통청년에서 유효 데이터 전체 수집 (진행중, 예정, 상시)
@@ -345,8 +449,7 @@ def main():
     # 3. 중복 제거 및 데이터 병합
     unified_policies = merge_and_deduplicate_policies(ontong_policies, public_policies)
 
-    # 4. 저장 경로 설정: project02/backend/data/YYYYMMDD_HHMM.json
-    # 현재 파일 위치(c:\project02\db) 기준 상위 폴더의 backend/data 디렉토리 경로 도출
+    # 4. 저장 경로 설정: backend/data/YYYYMMDD_HHMM.json
     current_dir = os.path.dirname(os.path.abspath(__file__))
     output_dir = os.path.abspath(os.path.join(current_dir, "..", "backend", "data"))
     os.makedirs(output_dir, exist_ok=True)
@@ -364,7 +467,6 @@ def main():
     print(f"   📍 전체 파일경로: {output_filepath}")
     print("=" * 75)
 
-    # 5. 상태별 통계 출력
     open_cnt = sum(1 for p in unified_policies if p["status"] == "진행중")
     upcoming_cnt = sum(1 for p in unified_policies if p["status"] == "예정")
     

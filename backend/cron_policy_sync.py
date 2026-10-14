@@ -35,9 +35,10 @@ async def main():
     print("📊 [실행 결과 보고서]")
     print(f"  • 상태: {'✅ 성공' if result.get('success') else '❌ 실패'}")
     print(f"  • API 호출 총 수집 건수: {result.get('total_fetched', 0)}건")
-    print(f"  • 신규 DB 저장 건수: {result.get('newly_inserted', 0)}건")
-    print(f"  • 기존 DB 중복 제외 건수: {result.get('skipped_duplicates', 0)}건")
-    print(f"  • 소요 시간: {result.get('elapsed_seconds', 0):.2f}초")
+    print(f"  • ✨ 신규 DB 저장 건수 (INSERT) : {result.get('newly_inserted', 0)}건")
+    print(f"  • 🔄 변경 데이터 수정 건수 (UPDATE): {result.get('updated_count', 0)}건")
+    print(f"  • ⏸️ 기존 동일 유지 건수 (SKIP)  : {result.get('unchanged_count', 0)}건")
+    print(f"  • ⏱️ 소요 시간: {result.get('elapsed_seconds', 0):.2f}초")
     print("=" * 60)
 
 if __name__ == "__main__":

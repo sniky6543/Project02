@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { getPolicyDetail, getPolicies, toggleBookmark } from '../api/supabasePolicies';
-import { PolicyDetail, PolicyItem } from '../types/policy';
+import { getPolicyDetail, getPolicies, toggleBookmark, applyPolicyAlert, getPolicyRelatedNews } from '../api/supabasePolicies';
+import { PolicyDetail, PolicyItem, PolicyNewsItem } from '../types/policy';
 import { prioritizePoliciesByProfile } from '../utils/policyMatcher';
 import { loadProfileSettings } from '../utils/profileStorage';
+import { addNotificationHistory } from '../utils/notificationStorage';
+import { sendTelegramMessage } from '../utils/telegramAlert';
 
 interface DetailViewProps {
   onNavigate?: (path: string, policyId?: string) => void;
@@ -12,6 +14,9 @@ interface DetailViewProps {
 export const DetailView: React.FC<DetailViewProps> = ({ onNavigate, policyId }) => {
   const [policy, setPolicy] = useState<PolicyDetail | null>(null);
   const [relatedPolicies, setRelatedPolicies] = useState<PolicyItem[]>([]);
+  const [relatedNews, setRelatedNews] = useState<PolicyNewsItem[]>([]);
+  const [activeNewsIndex, setActiveNewsIndex] = useState<number>(0);
+  const [newsLoading, setNewsLoading] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(true);
   const [isBookmarked, setIsBookmarked] = useState<boolean>(false);
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
@@ -23,10 +28,28 @@ export const DetailView: React.FC<DetailViewProps> = ({ onNavigate, policyId }) 
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  // 정책 데이터 로드
+  // 실시간 키워드 중심 뉴스 재탐색 및 AI 요약 갱신 (최신순 3건)
+  const handleRefreshNews = async () => {
+    if (!policy) return;
+    setNewsLoading(true);
+    try {
+      const freshNews = await getPolicyRelatedNews(policy.keywords, policy.id, policy.title, policy.organization, 3);
+      setRelatedNews(freshNews);
+      setActiveNewsIndex(0);
+      showToast(`✨ '${policy.title}' 관련 최신 뉴스 ${freshNews.length}건을 실시간 분석 완료했습니다.`);
+    } catch (err) {
+      console.error(err);
+      showToast('⚠️ 실시간 뉴스 분석 중 오류가 발생했습니다.');
+    } finally {
+      setNewsLoading(false);
+    }
+  };
+
+  // 정책 데이터 로드 및 키워드 기반 연관 뉴스 로드
   useEffect(() => {
     async function loadDetail() {
       setLoading(true);
+      setNewsLoading(true);
       try {
         let currentId = policyId;
 
@@ -43,21 +66,28 @@ export const DetailView: React.FC<DetailViewProps> = ({ onNavigate, policyId }) 
           setPolicy(detail);
           setIsBookmarked(Boolean(detail?.isBookmarked));
 
-          // 동일 카테고리 연관 정책 중 사용자 프로필 매칭 순으로 2건 추천
           if (detail) {
+            // 1. 동일 카테고리 연관 정책 중 사용자 프로필 매칭 순으로 2건 추천
             const related = await getPolicies({ category: detail.category, limit: 10 });
             const filtered = related.filter((r) => r.id !== currentId);
             const prioritized = prioritizePoliciesByProfile(filtered, loadProfileSettings());
             setRelatedPolicies(prioritized.slice(0, 2));
+
+            // 2. 해당 정책의 실시간 키워드 기반 최신순 뉴스 3건 로드
+            const newsItems = await getPolicyRelatedNews(detail.keywords, detail.id, detail.title, detail.organization, 3);
+            setRelatedNews(newsItems);
+            setActiveNewsIndex(0);
           }
         }
       } catch (err) {
         console.error('Failed to load policy detail:', err);
       } finally {
         setLoading(false);
+        setNewsLoading(false);
       }
     }
     loadDetail();
+
 
     // 음성 재생 중단
     if (window.speechSynthesis) {
@@ -90,6 +120,82 @@ export const DetailView: React.FC<DetailViewProps> = ({ onNavigate, policyId }) 
     setIsBookmarked(nextState);
     await toggleBookmark('guest_user', policy.id);
     showToast(nextState ? '⭐ 관심 정책 목록에 저장되었습니다!' : '🗑️ 관심 정책 저장이 해제되었습니다.');
+  };
+
+  // 정책 맞춤 알림 신청 (정책명 포함 등록 알림 발송 & DB 영구 보관)
+  const handleApplyAlert = async () => {
+    if (!policy) return;
+    try {
+      const profile = loadProfileSettings();
+      const channel: 'telegram' | 'email' = profile.isEmailSelected ? 'email' : 'telegram';
+      const recipient = (profile.isEmailSelected ? profile.emailAddress : profile.telegramId || '').trim();
+
+      // 계정 정보가 없는 경우 안내
+      if (!recipient) {
+        showToast(`⚠️ [${policy.title}] 알림을 수신할 계정(텔레그램 ID 또는 이메일)을 프로필에서 먼저 등록해주세요.`);
+        return;
+      }
+
+      // 1. Supabase & 백엔드 DB 알림 신청 API 호출
+      const res = await applyPolicyAlert(policy.id, {
+        sendMethod: channel,
+        telegramId: profile.telegramId,
+        email: profile.emailAddress,
+        customMessage: `[${policy.title}] 맞춤 알림 신청 완료`
+      });
+
+      // 2. 알림 히스토리 및 알림함(Notification Modal)에 상세 등록 메시지 저장
+      const messageContent = `[${policy.organization}] '${policy.title}' 맞춤 정책 알림이 정상적으로 등록되었습니다.\n\n📌 신청 정책: ${policy.title}\n🏢 주관 기관: ${policy.organization} (${policy.category})\n🎯 지원 대상: ${policy.eligibility?.age || policy.targetAge || '청년 대상'}\n📅 접수 기간: ${policy.applyPeriod || policy.period || '상시 접수'}\n📬 수신 채널: ${channel === 'telegram' ? '텔레그램' : '이메일'} (${recipient})\n\n💡 접수 마감일 및 주요 변경 사항이 발생할 때마다 ${recipient}(으)로 알림이 신속하게 전송됩니다.`;
+
+      addNotificationHistory({
+        policyId: policy.id,
+        policyTitle: policy.title,
+        category: policy.category,
+        channel,
+        recipient,
+        type: 'CUSTOM_ALERT',
+        typeLabel: '맞춤 정책 알림 등록',
+        message: messageContent
+      });
+
+      // 3. 실제 텔레그램 수신 채널인 경우 텔레그램 메시지 전송
+      if (channel === 'telegram') {
+        sendTelegramMessage(recipient, messageContent).then((tgResult) => {
+          if (!tgResult.success) {
+            console.warn('[Telegram Alert Failed]', tgResult.message);
+          }
+        });
+      }
+
+      // 4. 브라우저 데스크톱 알림 (Notification API) 지원 시 푸시 발송
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        if (Notification.permission === 'granted') {
+          try {
+            new Notification('청년나침반 맞춤 정책 알림 등록 완료', {
+              body: `[${policy.title}] 정책이 정상적으로 등록되었습니다.`,
+              icon: '/favicon.ico'
+            });
+          } catch {}
+        } else if (Notification.permission !== 'denied') {
+          Notification.requestPermission().then((permission) => {
+            if (permission === 'granted') {
+              try {
+                new Notification('청년나침반 맞춤 정책 알림 등록 완료', {
+                  body: `[${policy.title}] 정책이 정상적으로 등록되었습니다.`,
+                  icon: '/favicon.ico'
+                });
+              } catch {}
+            }
+          });
+        }
+      }
+
+      // 4. 화면 토스트 알림 표시
+      showToast(`🔔 [${policy.title}] 맞춤 알림이 정상적으로 등록되었습니다! (${recipient})`);
+    } catch (e) {
+      console.error('Failed to apply policy alert:', e);
+      showToast(`🔔 [${policy.title}] 정책 알림 신청이 접수되었습니다.`);
+    }
   };
 
   // 음성 요약 듣기 (Web Speech API)
@@ -157,7 +263,7 @@ export const DetailView: React.FC<DetailViewProps> = ({ onNavigate, policyId }) 
       : 'bg-purple-50 text-purple-700 border-purple-200';
 
   return (
-    <main className="flex-1 w-full pt-20 pb-16 bg-[#f8fafc] max-w-[1240px] mx-auto px-4 md:px-8">
+    <main className="flex-1 w-full pt-16 sm:pt-20 pb-32 lg:pb-16 bg-[#f8fafc] max-w-[1240px] mx-auto px-3.5 sm:px-6 md:px-8">
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-20 right-6 z-50 bg-slate-900 text-white text-xs font-semibold px-4 py-3 rounded-2xl shadow-2xl border border-sky-400/40 flex items-center gap-2.5 animate-bounce">
@@ -247,6 +353,32 @@ export const DetailView: React.FC<DetailViewProps> = ({ onNavigate, policyId }) 
                 <p className="text-slate-600 text-sm md:text-base leading-relaxed">
                   {policy.benefitSummary || policy.benefit.details || policy.summary}
                 </p>
+
+                {/* AI 추출 키워드 태그 */}
+                {(() => {
+                  const rawKw = policy.keywords;
+                  let kwList: string[] = [];
+                  if (Array.isArray(rawKw)) {
+                    kwList = rawKw.map((k) => String(k).trim()).filter(Boolean);
+                  } else if (typeof rawKw === 'string' && rawKw.trim()) {
+                    kwList = rawKw.split(',').map((k) => k.trim().replace(/^#/, '')).filter(Boolean);
+                  }
+                  if (kwList.length === 0) {
+                    kwList = [policy.category, policy.organization, '청년지원'];
+                  }
+                  return (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {kwList.map((kw, idx) => (
+                        <span
+                          key={idx}
+                          className="px-2.5 py-0.5 rounded-lg bg-white/90 text-sky-700 text-xs font-semibold border border-sky-200/80 shadow-xs"
+                        >
+                          #{kw}
+                        </span>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Metric Card */}
@@ -576,6 +708,257 @@ export const DetailView: React.FC<DetailViewProps> = ({ onNavigate, policyId }) 
               </div>
             </div>
 
+            {/* Section 5: 실시간 정책 키워드 중심 뉴스 & 언론 보도 (다크 하이라이트 & 인터랙티브 요약 뷰어) */}
+            <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#0a1128] via-[#0f172a] to-[#1e1b4b] p-6 md:p-8 text-white shadow-2xl shadow-indigo-950/40 border border-indigo-500/30 space-y-6">
+              {/* Background Ambient Glows */}
+              <div className="absolute -right-16 -top-16 w-72 h-72 rounded-full bg-cyan-500/15 blur-3xl pointer-events-none"></div>
+              <div className="absolute -left-16 -bottom-16 w-72 h-72 rounded-full bg-indigo-500/20 blur-3xl pointer-events-none"></div>
+
+              {/* 1. Header & Controls */}
+              <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between pb-4 border-b border-slate-700/80 gap-4">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-cyan-500 via-sky-600 to-indigo-600 flex items-center justify-center text-white text-xl shadow-lg shadow-cyan-500/30 shrink-0">
+                    📰
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-lg md:text-xl font-black text-white tracking-tight">
+                        정책 관련 실시간 뉴스 &amp; <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-sky-300 to-indigo-300">AI 요약 브리핑</span>
+                      </h3>
+                      <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 text-xs font-extrabold flex items-center gap-1.5 shadow-xs">
+                        <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                        실시간 3건 분석
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-300 pt-1">
+                      정책 키워드로 탐색된 핵심 언론 보도 요약을 버튼을 눌러 순차적으로 확인하실 수 있습니다.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2.5 self-end md:self-auto shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleRefreshNews}
+                    disabled={newsLoading}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-cyan-300 hover:text-white text-xs font-bold border border-cyan-500/30 transition-all cursor-pointer active:scale-95 disabled:opacity-50 shadow-sm"
+                    title="실시간 뉴스 기사를 다시 검색하고 AI 요약을 갱신합니다."
+                  >
+                    <span className={newsLoading ? 'animate-spin' : ''}>🔄</span>
+                    <span>실시간 AI 갱신</span>
+                  </button>
+                  <span className="text-xs font-bold text-slate-200 bg-slate-800/90 px-3 py-2 rounded-xl border border-slate-700">
+                    총 {relatedNews.length}건 중 {relatedNews.length > 0 ? activeNewsIndex + 1 : 0}번째
+                  </span>
+                </div>
+              </div>
+
+              {/* 2. News Tab Selector (1번 뉴스, 2번 뉴스, 3번 뉴스) */}
+              {!newsLoading && relatedNews.length > 0 && (
+                <div className="relative z-10 flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+                  {relatedNews.map((n, idx) => {
+                    const isActive = idx === activeNewsIndex;
+                    return (
+                      <button
+                        key={n.id || idx}
+                        onClick={() => setActiveNewsIndex(idx)}
+                        type="button"
+                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
+                          isActive
+                            ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-lg shadow-cyan-500/30 ring-2 ring-cyan-300 scale-[1.02]'
+                            : 'bg-slate-800/70 hover:bg-slate-800 text-slate-300 border border-slate-700/80 hover:text-white'
+                        }`}
+                      >
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-extrabold ${isActive ? 'bg-white text-blue-700' : 'bg-slate-700 text-slate-300'}`}>
+                          {idx + 1}
+                        </span>
+                        <span className="truncate max-w-[140px] md:max-w-[200px]">{n.publisher} · {n.title}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* 3. Main Content: Active News Card */}
+              {newsLoading ? (
+                <div className="relative z-10 p-6 rounded-2xl bg-slate-800/60 border border-slate-700/60 animate-pulse space-y-4">
+                  <div className="flex justify-between items-center">
+                    <div className="w-32 h-5 bg-slate-700 rounded"></div>
+                    <div className="w-24 h-4 bg-slate-700 rounded"></div>
+                  </div>
+                  <div className="w-4/5 h-6 bg-slate-700 rounded"></div>
+                  <div className="w-full h-32 bg-slate-700/80 rounded-xl"></div>
+                </div>
+              ) : relatedNews.length === 0 ? (
+                <div className="relative z-10 p-10 text-center bg-slate-800/50 rounded-2xl border border-slate-700 text-slate-400 space-y-2">
+                  <p className="text-3xl">📋</p>
+                  <p className="text-base font-bold text-slate-200">현재 정책 키워드 기반 뉴스를 실시간 수집 중입니다.</p>
+                  <p className="text-xs text-slate-400">상단 [실시간 AI 갱신] 버튼을 눌러 최신 기사를 불러올 수 있습니다.</p>
+                </div>
+              ) : (
+                (() => {
+                  const currentNews = relatedNews[activeNewsIndex] || relatedNews[0];
+                  const rawLines = currentNews.summary3Lines ? currentNews.summary3Lines.split('\n').filter(Boolean) : [];
+                  const kws = Array.isArray(currentNews.keywords) ? currentNews.keywords : [];
+
+                  const handlePrevNews = () => {
+                    setActiveNewsIndex((prev) => (prev > 0 ? prev - 1 : relatedNews.length - 1));
+                  };
+
+                  const handleNextNews = () => {
+                    setActiveNewsIndex((prev) => (prev < relatedNews.length - 1 ? prev + 1 : 0));
+                  };
+
+                  return (
+                    <article className="relative z-10 p-6 md:p-7 rounded-2xl bg-slate-950/80 border border-indigo-500/40 shadow-xl space-y-5">
+                      {/* Top Header: Badge, Publisher, Date, Direct Link */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="px-3 py-1 rounded-lg bg-cyan-500/20 text-cyan-300 font-extrabold text-xs border border-cyan-400/40">
+                            {currentNews.publisher || '언론사 보도'}
+                          </span>
+                          <span className="text-slate-400 font-medium">{currentNews.publishedAt}</span>
+                          <span className="text-[11px] text-indigo-300 bg-indigo-950/80 px-2.5 py-0.5 rounded-md border border-indigo-700/50">
+                            기사 #{activeNewsIndex + 1} / {relatedNews.length}
+                          </span>
+                        </div>
+                        <span className="text-xs text-cyan-400 font-semibold bg-cyan-950/60 px-2.5 py-1 rounded-lg border border-cyan-800/40">
+                          🎯 키워드 #{currentNews.keywords?.[0] || policy.category} 매칭
+                        </span>
+                      </div>
+
+                      {/* Title: Click to Open URL */}
+                      <h4
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (currentNews.url) {
+                            const targetUrl = currentNews.url.startsWith('http') ? currentNews.url : `https://${currentNews.url}`;
+                            window.open(targetUrl, '_blank', 'noopener,noreferrer');
+                          }
+                        }}
+                        className="text-lg md:text-xl font-extrabold text-white hover:text-cyan-300 transition-colors leading-snug cursor-pointer flex items-start justify-between gap-3 group"
+                        title="클릭하여 원문 기사 페이지로 이동 (새 창)"
+                      >
+                        <span>{currentNews.title}</span>
+                        <span className="text-slate-400 group-hover:text-cyan-300 text-base shrink-0">↗</span>
+                      </h4>
+
+                      {/* AI 3줄 핵심 요약 박스 (Dark Glowing Accent) */}
+                      <div className="p-5 rounded-2xl bg-gradient-to-br from-slate-900/95 via-slate-900/90 to-indigo-950/60 border border-indigo-500/30 text-xs md:text-sm text-slate-200 space-y-3 shadow-inner">
+                        <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                          <span className="font-extrabold text-white flex items-center gap-2 text-xs md:text-sm">
+                            <span className="text-cyan-400 text-base">✨</span>
+                            <span className="tracking-tight">AI 3줄 핵심 뉴스 요약</span>
+                          </span>
+                          <span className="text-[11px] text-cyan-300/80 font-semibold">OpenRouter AI 실시간 분석</span>
+                        </div>
+
+                        <div className="space-y-2.5 leading-relaxed pt-1">
+                          {rawLines.length > 0 ? (
+                            rawLines.map((line, lIdx) => {
+                              const cleanLine = line.replace(/^\[\d+\]\s*/, '').replace(/^\d+\.\s*/, '');
+                              const label = lIdx === 0 ? '정책 동향' : lIdx === 1 ? '핵심 혜택' : '신청·유의';
+                              const labelColor =
+                                lIdx === 0
+                                  ? 'bg-sky-500/20 text-sky-300 border border-sky-400/40'
+                                  : lIdx === 1
+                                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
+                                  : 'bg-amber-500/20 text-amber-300 border border-amber-400/40';
+                              return (
+                                <div key={lIdx} className="flex items-start gap-2.5">
+                                  <span className={`px-2 py-0.5 rounded-md text-[11px] font-black shrink-0 mt-0.5 ${labelColor}`}>
+                                    {label}
+                                  </span>
+                                  <p className="text-slate-200 flex-1 leading-relaxed font-normal">
+                                    {cleanLine.replace(/^\[(정책 동향|핵심 혜택|신청·유의|보도 개요|주요 혜택|신청 절차|현장 반응|선발 조건|유의 사항|접수 팁|필수 서류|결과 확인)\]\s*/, '')}
+                                  </p>
+                                </div>
+                              );
+                            })
+                          ) : (
+                            <p className="text-slate-300">{currentNews.summary3Lines || '기사의 핵심 요약 내용입니다.'}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Keywords Tags */}
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                        <span className="text-xs text-slate-400 font-semibold mr-1">연관 태그:</span>
+                        {kws.slice(0, 6).map((kw, kIdx) => (
+                          <span
+                            key={kIdx}
+                            className="px-2.5 py-1 rounded-lg bg-slate-800/90 text-cyan-300 text-xs font-medium border border-slate-700/80 shadow-2xs"
+                          >
+                            #{kw}
+                          </span>
+                        ))}
+                      </div>
+
+                      {/* Footer Control Bar: Prev / Next Buttons & Direct Link */}
+                      <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3.5">
+                        {/* News Step Indicator & Prev/Next Buttons */}
+                        <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
+                          <button
+                            type="button"
+                            onClick={handlePrevNews}
+                            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs font-bold border border-slate-700 transition-all cursor-pointer active:scale-95 flex items-center gap-1"
+                            title="이전 뉴스 요약 보기"
+                          >
+                            <span>◀</span>
+                            <span>이전 뉴스</span>
+                          </button>
+
+                          {/* Dots Indicator */}
+                          <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800">
+                            {relatedNews.map((_, dIdx) => (
+                              <button
+                                key={dIdx}
+                                onClick={() => setActiveNewsIndex(dIdx)}
+                                className={`h-2 rounded-full transition-all cursor-pointer ${
+                                  dIdx === activeNewsIndex
+                                    ? 'w-6 bg-gradient-to-r from-cyan-400 to-sky-400'
+                                    : 'w-2 bg-slate-700 hover:bg-slate-500'
+                                }`}
+                                title={`${dIdx + 1}번 뉴스로 이동`}
+                              />
+                            ))}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={handleNextNews}
+                            className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 via-sky-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-xs font-black shadow-lg shadow-cyan-500/25 transition-all cursor-pointer active:scale-95 flex items-center gap-1.5 ring-1 ring-cyan-300/50"
+                            title="다음 뉴스 요약 보기"
+                          >
+                            <span>다음 뉴스 요약 보기</span>
+                            <span>▶</span>
+                          </button>
+                        </div>
+
+                        {/* Direct Link Button */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (currentNews.url) {
+                              const targetUrl = currentNews.url.startsWith('http') ? currentNews.url : `https://${currentNews.url}`;
+                              window.open(targetUrl, '_blank', 'noopener,noreferrer');
+                            }
+                          }}
+                          className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-cyan-600 text-cyan-200 hover:text-white text-xs font-bold border border-slate-700 hover:border-cyan-500 transition-all shadow-sm cursor-pointer active:scale-95 shrink-0"
+                          title="해당 언론사 원문 기사 페이지로 이동합니다."
+                        >
+                          <span>언론사 원본보기</span>
+                          <span>↗</span>
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })()
+              )}
+            </div>
+
             {/* Related Recommendation Banner */}
             {relatedPolicies.length > 0 && (
               <div className="bg-white rounded-2xl p-6 shadow-sm border border-sky-100 shadow-sky-100/40 space-y-4">
@@ -644,6 +1027,16 @@ export const DetailView: React.FC<DetailViewProps> = ({ onNavigate, policyId }) 
                   <span>공식 신청 페이지 바로가기</span>
                   <span>↗</span>
                 </a>
+
+                {/* 알람 신청 버튼 */}
+                <button
+                  onClick={handleApplyAlert}
+                  className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-teal-50 to-sky-50 hover:from-teal-100 hover:to-sky-100 text-teal-800 border border-teal-200/80 font-bold text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer"
+                  title="등록된 텔레그램 ID 또는 이메일로 정책 마감/변동 알림을 DB에 등록합니다."
+                >
+                  <span className="text-sm">🔔</span>
+                  <span>맞춤 알림 신청 (텔레그램/이메일 DB 등록)</span>
+                </button>
 
                 <div className="grid grid-cols-2 gap-2 pt-0.5">
                   <button
@@ -722,6 +1115,37 @@ export const DetailView: React.FC<DetailViewProps> = ({ onNavigate, policyId }) 
           </div>
         </div>
 
+      </div>
+
+      {/* Mobile & Tablet Floating Action Bar (<1024px) */}
+      <div className="fixed bottom-16 left-0 right-0 z-30 lg:hidden bg-white/95 backdrop-blur-md border-t border-sky-100 p-3 shadow-[0_-4px_16px_rgba(0,0,0,0.08)] flex items-center gap-2">
+        <button
+          onClick={handleBookmark}
+          className={`p-3 rounded-xl border flex items-center justify-center text-base transition-colors shrink-0 ${
+            isBookmarked ? 'bg-amber-50 text-amber-500 border-amber-200' : 'bg-slate-50 text-slate-500 border-slate-200'
+          }`}
+          title="관심 정책 저장"
+        >
+          {isBookmarked ? '★' : '☆'}
+        </button>
+
+        <button
+          onClick={handleApplyAlert}
+          className="p-3 rounded-xl bg-teal-50 text-teal-700 border border-teal-200 flex items-center justify-center text-sm font-bold shrink-0"
+          title="텔레그램/이메일 알림 신청"
+        >
+          🔔
+        </button>
+
+        <a
+          href={policy.applicationUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-600 hover:to-sky-700 text-white font-extrabold text-xs sm:text-sm text-center shadow-md shadow-sky-300/40 flex items-center justify-center gap-1.5 active:scale-[0.98] transition-all"
+        >
+          <span>공식 신청하기</span>
+          <span>↗</span>
+        </a>
       </div>
     </main>
   );

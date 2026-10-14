@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS policies (
     special_criteria VARCHAR(100),
     application_url TEXT,
     contact VARCHAR(100),
+    keywords VARCHAR(255), -- 정책 검색 및 AI 분류 키워드 (예: 월세지원, 주거안정, 무주택청년)
     view_count INTEGER DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -82,8 +83,45 @@ CREATE TABLE IF NOT EXISTS ai_recommendation_logs (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 6. 정책 직결 뉴스 및 AI 요약/키워드 테이블 (Policy News & AI Summaries)
+CREATE TABLE IF NOT EXISTS policy_news (
+    id VARCHAR(100) PRIMARY KEY,
+    policy_id VARCHAR(50) REFERENCES policies(id) ON DELETE SET NULL,
+    policy_name VARCHAR(255) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    publisher VARCHAR(100),
+    url TEXT NOT NULL,
+    published_at VARCHAR(50),
+    summary_3lines TEXT NOT NULL,
+    keywords VARCHAR(255), -- AI 추출 뉴스 핵심 키워드 5개 이상 (예: 청년도약계좌, 정부기여금, 비과세혜택, 자산형성, 금리우대)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 7. 알림 및 메시지 발송 기록 테이블 (Notification Logs)
+CREATE TABLE IF NOT EXISTS notification_logs (
+    no SERIAL PRIMARY KEY,
+    send_method VARCHAR(20) NOT NULL, -- 발송 방법 (email / telegram / system)
+    recipient_id VARCHAR(255) NOT NULL, -- 수신자 ID (텔레그램 ID 또는 이메일 주소)
+    content TEXT NOT NULL, -- 발송된 알림 메시지 본문 내용
+    sent_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL, -- 발송 일시
+    user_id VARCHAR(50) REFERENCES users(id) ON DELETE SET NULL, -- 연계 사용자 ID (선택)
+    policy_id VARCHAR(50) REFERENCES policies(id) ON DELETE SET NULL, -- 연계 정책 ID (선택)
+    status VARCHAR(20) DEFAULT 'SENT', -- 발송 상태 (SENT, REGISTERED, SUCCESS, FAILED)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- 인덱스 생성 (검색 성능 최적화)
 CREATE INDEX IF NOT EXISTS idx_policies_category ON policies(category);
 CREATE INDEX IF NOT EXISTS idx_policies_status ON policies(status);
 CREATE INDEX IF NOT EXISTS idx_policies_age ON policies(min_age, max_age);
 CREATE INDEX IF NOT EXISTS idx_policies_income ON policies(min_income, max_income);
+CREATE INDEX IF NOT EXISTS idx_policies_keywords ON policies(keywords);
+CREATE INDEX IF NOT EXISTS idx_policy_news_policy_id ON policy_news(policy_id);
+CREATE INDEX IF NOT EXISTS idx_policy_news_keywords ON policy_news(keywords);
+CREATE INDEX IF NOT EXISTS idx_notification_logs_method_sent ON notification_logs(send_method, sent_at);
+CREATE INDEX IF NOT EXISTS idx_notification_logs_recipient ON notification_logs(recipient_id);
+CREATE INDEX IF NOT EXISTS idx_notification_logs_policy_id ON notification_logs(policy_id);
+CREATE INDEX IF NOT EXISTS idx_notification_logs_user_id ON notification_logs(user_id);
+
+

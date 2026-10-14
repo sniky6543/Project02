@@ -58,6 +58,11 @@ class NotificationLog(Base):
     # 5. 발송시간
     sent_at = Column(DateTime, default=datetime.utcnow, nullable=False, comment="발송시간")
 
+    # 6. 연계 정보
+    user_id = Column(String(50), nullable=True, comment="연계 사용자 ID")
+    policy_id = Column(String(100), nullable=True, comment="연계 정책 ID")
+    status = Column(String(20), default="SENT", comment="발송 상태")
+
 # 3. DB에 테이블 생성 적용
 try:
     Base.metadata.create_all(engine)

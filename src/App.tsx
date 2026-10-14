@@ -13,6 +13,12 @@ import ProfileView from './views/ProfileView';
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabKey>('home');
   const [selectedPolicyId, setSelectedPolicyId] = useState<string | null>(null);
+  const [exploreInitialParams, setExploreInitialParams] = useState<{
+    category?: string;
+    keyword?: string;
+    employment?: string;
+    [key: string]: any;
+  } | null>(null);
   const [showQuickSwitcher, setShowQuickSwitcher] = useState(true);
 
   // Scroll to top on view change
@@ -20,9 +26,16 @@ export const App: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [activeTab, selectedPolicyId]);
 
-  const handleNavigate = (path: string, policyId?: string) => {
+  const handleNavigate = (
+    path: string,
+    policyId?: string,
+    extraParams?: { category?: string; keyword?: string; employment?: string; [key: string]: any }
+  ) => {
     if (policyId) {
       setSelectedPolicyId(policyId);
+    }
+    if (extraParams !== undefined) {
+      setExploreInitialParams(extraParams);
     }
 
     switch (path) {
@@ -77,12 +90,23 @@ export const App: React.FC = () => {
   return (
     <div className="min-h-screen flex flex-col bg-[#f8fafc] text-slate-800">
       {/* Top Fixed Header */}
-      <Header activeTab={activeTab} onNavigate={(tab) => setActiveTab(tab)} />
+      <Header activeTab={activeTab} onNavigate={(tab, policyId) => {
+        if (tab === 'explore') {
+          // 헤더에서 직접 정책탐색 탭을 클릭할 때는 필터 파라미터 초기화
+          setExploreInitialParams(null);
+        }
+        if (policyId) {
+          setSelectedPolicyId(policyId);
+        }
+        setActiveTab(tab);
+      }} />
 
       {/* Main View Render */}
       <div className="flex-1 flex flex-col">
         {activeTab === 'home' && <HomeView onNavigate={handleNavigate} />}
-        {activeTab === 'explore' && <ExploreView onNavigate={handleNavigate} />}
+        {activeTab === 'explore' && (
+          <ExploreView onNavigate={handleNavigate} initialParams={exploreInitialParams} />
+        )}
         {activeTab === 'detail' && (
           <DetailView onNavigate={handleNavigate} policyId={selectedPolicyId} />
         )}
@@ -98,7 +122,7 @@ export const App: React.FC = () => {
       {/* Floating Quick Screen Switcher for reviewing all 7 screens */}
       <aside
         aria-label="화면 퀵 스위처"
-        className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2"
+        className="fixed bottom-20 lg:bottom-4 right-3 sm:right-4 z-50 flex flex-col items-end gap-2"
       >
         {showQuickSwitcher ? (
           <div className="bg-slate-900/90 backdrop-blur-xl border border-slate-700/80 rounded-2xl p-3 shadow-2xl text-white flex flex-col gap-2 max-w-[340px] sm:max-w-none">

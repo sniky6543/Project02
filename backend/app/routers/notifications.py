@@ -6,7 +6,8 @@ from datetime import datetime
 from app.database import get_db
 from app.schemas.notification import (
     NotificationCreate,
-    NotificationResponse
+    NotificationResponse,
+    PolicyAlertApplyRequest
 )
 from app.crud import notification as notification_crud
 
@@ -18,6 +19,7 @@ async def get_notifications(
     send_method: Optional[str] = Query(None, description="발송방법 필터 (email / telegram)"),
     recipient_id: Optional[str] = Query(None, description="수신자 ID 필터"),
     user_id: Optional[str] = Query(None, description="사용자 ID 필터"),
+    policy_id: Optional[str] = Query(None, description="정책 ID 필터"),
     limit: int = Query(50, ge=1, le=100, description="조회 개수"),
     offset: int = Query(0, ge=0, description="조회 시작 위치"),
     db: AsyncSession = Depends(get_db)
@@ -30,6 +32,7 @@ async def get_notifications(
         send_method=send_method,
         recipient_id=recipient_id,
         user_id=user_id,
+        policy_id=policy_id,
         limit=limit,
         offset=offset
     )
@@ -45,14 +48,38 @@ async def get_notifications(
         "timestamp": datetime.utcnow().isoformat() + "Z"
     }
 
-@router.post("", status_code=status.HTTP_201_CREATED, summary="알림 발송 내역 저장")
-@router.post("/", status_code=status.HTTP_201_CREATED, summary="알림 발송 내역 저장")
+@router.post("/apply", status_code=status.HTTP_201_CREATED, summary="정책 알람 신청 (정책 내용 + 등록 텔레그램ID/이메일 DB 저장)")
+@router.post("/apply/", status_code=status.HTTP_201_CREATED, summary="정책 알람 신청 (정책 내용 + 등록 텔레그램ID/이메일 DB 저장)")
+@router.post("/subscribe", status_code=status.HTTP_201_CREATED, summary="정책 알람 신청 (Alias)")
+@router.post("/subscribe/", status_code=status.HTTP_201_CREATED, summary="정책 알람 신청 (Alias)")
+async def apply_policy_alert(
+    request: PolicyAlertApplyRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    특정 정책의 알람을 신청합니다:
+    1. 사용자의 등록된 텔레그램 ID 또는 이메일을 DB에서 조회하고 (필요 시 신규 입력값으로 갱신),
+    2. 신청한 정책의 상세 내용(제목, 혜택, 신청기간, 링크 등)을 DB에서 추출하여,
+    3. 수신 채널(텔레그램 / 이메일)에 맞게 발송/알람 내역(notification_logs)을 DB에 즉시 등록합니다.
+    """
+    result = await notification_crud.apply_policy_alert(db=db, request=request)
+    return {
+        "success": True,
+        "statusCode": 201,
+        "message": result.message,
+        "data": result,
+        "timestamp": datetime.utcnow().isoformat() + "Z"
+    }
+
+@router.post("", status_code=status.HTTP_201_CREATED, summary="알림 발송 내역 직접 저장")
+@router.post("/", status_code=status.HTTP_201_CREATED, summary="알림 발송 내역 직접 저장")
 async def create_notification(
     request: NotificationCreate,
     db: AsyncSession = Depends(get_db)
 ):
     """
     새로운 알림 발송 기록(email/텔레그램)을 DB에 저장합니다.
+    policy_id 입력 시 정책 상세 내용이 자동으로 포맷팅됩니다.
     """
     created = await notification_crud.create_notification_log(db, request)
     return {

@@ -318,6 +318,67 @@ class PolicyNewsSearcher:
             f"[3] 예산 한도 내 조기 마감될 수 있으므로 주관기관 공고를 확인 후 신속한 신청이 권장됩니다."
         )
 
+    def extract_news_keywords(self, news_item: Dict[str, Any], policy_title: str, llm_invoker=None, min_count: int = 5) -> List[str]:
+        """뉴스 요약 시 뉴스에 대한 핵심 키워드 5개 이상(5~8개) 추출"""
+        content = news_item.get("content", "")
+        title = news_item.get("title", "")
+
+        if llm_invoker:
+            prompt = (
+                f"당신은 대한민국 청년 정책 및 시사 뉴스 전문 분석관입니다.\n"
+                f"정책 '{policy_title}'과 관련된 아래 뉴스 기사를 분석하여, 뉴스의 맥락을 대표하는 핵심 키워드를 반드시 {min_count}개 이상 (5~8개) 추출하세요.\n"
+                f"반드시 JSON 배열 형식(예: [\"청년도약계좌\", \"정부기여금\", \"비과세혜택\", \"자산형성\", \"시중은행\"])으로만 응답하세요.\n\n"
+                f"[기사 제목]: {title}\n"
+                f"[기사 본문]:\n{content[:1000]}\n\n"
+                f"[핵심 키워드 (5개 이상, JSON 배열)]:"
+            )
+            try:
+                res = llm_invoker(prompt, system_prompt="청년 정책 뉴스 키워드 분석 AI")
+                match = re.search(r"\[[\s\S]*?\]", res)
+                if match:
+                    parsed = json.loads(match.group(0))
+                    if isinstance(parsed, list) and len(parsed) >= 1:
+                        clean_kws = [str(k).strip().replace("#", "") for k in parsed if str(k).strip()]
+                        if len(clean_kws) >= min_count:
+                            return clean_kws[:8]
+            except Exception:
+                pass
+
+        # Fallback 룰 기반 추출
+        candidates = []
+        if policy_title:
+            clean_pol = re.sub(r"\[.*?\]|\(.*?\)", "", policy_title).strip()
+            if clean_pol:
+                candidates.append(clean_pol)
+
+        combined = f"{policy_title} {title} {content}".lower()
+        keyword_pool = [
+            ("도약계좌", "청년도약계좌"), ("기여금", "정부기여금"), ("비과세", "비과세혜택"), ("자산", "자산형성"),
+            ("월세", "청년월세지원"), ("보증금", "보증금대출"), ("주거", "주거안정"), ("공공임대", "공공임대주택"),
+            ("구직", "구직활동지원"), ("취업", "청년취업지원"), ("인턴", "일경험인턴십"), ("창업", "청년창업육성"),
+            ("교통비", "K-패스교통비"), ("학자금", "학자금대출이자"), ("역량", "직무역량강화"), ("마음건강", "청년마음건강")
+        ]
+        for trigger, kw in keyword_pool:
+            if trigger in combined and kw not in candidates:
+                candidates.append(kw)
+
+        nouns = [w for w in re.sub(r"[^\w\s]", " ", f"{title} {content[:200]}").split() if len(w) >= 2 and w not in ["청년", "지원", "사업", "안내", "뉴스", "기자", "보도"]]
+        for n in nouns:
+            if n not in candidates:
+                candidates.append(n)
+                if len(candidates) >= min_count + 2:
+                    break
+
+        defaults = ["청년정책동향", "맞춤수혜혜택", "정부지원사업", "온라인신청", "생활안정지원"]
+        for df in defaults:
+            if df not in candidates:
+                candidates.append(df)
+            if len(candidates) >= min_count:
+                break
+
+        return candidates[:max(min_count, len(candidates))]
+
+
 
 # ==============================================================================
 # 3. 통합 정책 지식베이스 (온통청년 API + 복지로 API + 로컬 데이터셋)
@@ -734,10 +795,54 @@ class PolicyRAGPipeline:
         self.news_searcher = PolicyNewsSearcher()
         self.ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
+        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "")
+        self.openrouter_model = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
 
     def _invoke_llm(self, prompt: str, system_prompt: str = "", model_preference: Optional[str] = None) -> Optional[str]:
-        provider = (model_preference or "OLLAMA").upper()
+        provider = (model_preference or "Router API").upper()
 
+        # 1. OpenRouter (기본)
+        if any(k in provider for k in ["ROUTER", "OPENROUTER"]) or (self.openrouter_api_key and not self.openrouter_api_key.startswith("sk-or-v1-your")):
+            try:
+                import requests
+                headers = {
+                    "Authorization": f"Bearer {self.openrouter_api_key}",
+                    "Content-Type": "application/json"
+                }
+                messages = []
+                if system_prompt:
+                    messages.append({"role": "system", "content": system_prompt})
+                messages.append({"role": "user", "content": prompt})
+
+                payload = {
+                    "model": self.openrouter_model,
+                    "messages": messages,
+                    "temperature": 0.2
+                }
+                resp = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=25)
+                if resp.status_code == 200:
+                    text = resp.json()["choices"][0]["message"]["content"].strip()
+                    if text:
+                        return text
+            except Exception:
+                pass
+
+        # 2. OpenAI
+        if ("OPENAI" in provider or self.openai_api_key) and not self.openai_api_key.startswith("sk-proj-your"):
+            try:
+                from openai import OpenAI
+                client = OpenAI(api_key=self.openai_api_key)
+                model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+                messages = []
+                if system_prompt:
+                    messages.append({"role": "system", "content": system_prompt})
+                messages.append({"role": "user", "content": prompt})
+                resp = client.chat.completions.create(model=model, messages=messages, temperature=0.2)
+                return resp.choices[0].message.content.strip()
+            except Exception:
+                pass
+
+        # 3. Ollama
         if "OLLAMA" in provider:
             try:
                 selected_model = os.getenv("OLLAMA_MODEL", "exaone3.5:latest")
@@ -755,20 +860,6 @@ class PolicyRAGPipeline:
             except Exception:
                 pass
 
-        if ("OPENAI" in provider or self.openai_api_key) and not self.openai_api_key.startswith("sk-proj-your"):
-            try:
-                from openai import OpenAI
-                client = OpenAI(api_key=self.openai_api_key)
-                model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-                messages = []
-                if system_prompt:
-                    messages.append({"role": "system", "content": system_prompt})
-                messages.append({"role": "user", "content": prompt})
-                resp = client.chat.completions.create(model=model, messages=messages, temperature=0.2)
-                return resp.choices[0].message.content.strip()
-            except Exception:
-                pass
-
         return None
 
     def match_policies(
@@ -776,7 +867,7 @@ class PolicyRAGPipeline:
         user_profile: Dict[str, Any],
         preferred_categories: Optional[List[str]] = None,
         top_k: int = 3,
-        ai_model: Optional[str] = "OLLAMA"
+        ai_model: Optional[str] = "Router API"
     ) -> Dict[str, Any]:
         """사용자 프로필 기반 온통청년/복지로 RAG 맞춤 추천 + 구글 뉴스 RSS 3줄 요약 결합"""
         candidates = self.retriever.search_for_profile(
@@ -1015,7 +1106,7 @@ class PolicyRAGPipeline:
         question: str,
         policy_id: Optional[str] = None,
         chat_history: Optional[List[Dict[str, str]]] = None,
-        ai_model: Optional[str] = "OLLAMA"
+        ai_model: Optional[str] = "Router API"
     ) -> Dict[str, Any]:
         results = self.retriever.search_for_query(question, top_k=2, filter_policy_id=policy_id)
 
