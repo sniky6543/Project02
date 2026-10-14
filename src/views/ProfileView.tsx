@@ -12,6 +12,7 @@ import { addNotificationHistory } from '../utils/notificationStorage';
 import { PolicyItem } from '../types/policy';
 import { calculatePolicyMatch } from '../utils/policyMatcher';
 import { KOREA_REGIONS, KOREA_CITIES } from '../utils/regionData';
+import { sendTelegramMessage } from '../utils/telegramAlert';
 
 interface ProfileViewProps {
   onNavigate?: (path: string, policyId?: string) => void;
@@ -91,15 +92,19 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
 
   // 텔레그램 봇 아이디 복사 핸들러
   const handleCopyBotUsername = () => {
-    navigator.clipboard.writeText('@youth_compass_bot');
+    navigator.clipboard.writeText('@youth_alarm_bot');
     setCopiedBotId(true);
-    showToast('📋 텔레그램 봇 아이디(@youth_compass_bot)가 복사되었습니다.');
+    showToast('📋 텔레그램 봇 아이디(@youth_alarm_bot)가 복사되었습니다.');
     setTimeout(() => setCopiedBotId(false), 2500);
   };
 
   // 텔레그램 테스트 알림 발송 및 DB 저장
-  const handleSendTestTelegramAlert = () => {
-    const targetTg = (telegramId && telegramId.trim()) || '@youth_compass_user';
+  const handleSendTestTelegramAlert = async () => {
+    const rawTarget = (telegramId && telegramId.trim()) || '';
+    if (!rawTarget) {
+      showToast('⚠️ 텔레그램 Chat ID(숫자)를 입력해주세요. (@userinfobot에서 확인 가능)');
+      return;
+    }
     setTestAlertSent(true);
 
     const nowStr = new Date().toLocaleString('ko-KR', {
@@ -111,19 +116,26 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
       hour12: false,
     });
 
-    const testMsg = `[청년나침반 텔레그램 알림 연동 테스트]\n회원님의 텔레그램 계정(${targetTg})으로 맞춤 정책 알림이 정상 발송되었습니다.\n주요 청년 지원 정책 공고 및 마감 임박 알림이 실시간으로 발송됩니다.\n(발송 일시: ${nowStr})`;
+    const testMsg = `🧭 [청년나침반 텔레그램 알림 테스트]\n\n회원님의 계정(${rawTarget})으로 맞춤 정책 알림이 정상 연결되었습니다!\n\n📌 알림 내용: 청년 맞춤 지원 정책 공고 및 마감 임박 알림 수신 준비 완료\n📅 발송 일시: ${nowStr}\n\n앞으로 새로운 정책 공고가 등록되면 신속하게 안내해 드립니다.`;
+
+    const result = await sendTelegramMessage(rawTarget, testMsg);
 
     addNotificationHistory({
       policyTitle: '청년나침반 텔레그램 알림 연동 테스트',
       category: '텔레그램 알림',
       channel: 'telegram',
-      recipient: targetTg,
+      recipient: result.chatId || rawTarget,
       type: 'CUSTOM_ALERT',
-      typeLabel: '텔레그램 발송',
+      typeLabel: result.success ? '텔레그램 발송 성공' : '텔레그램 발송 실패',
       message: testMsg,
     });
 
-    showToast(`🔔 [텔레그램 발송 완료] (${targetTg}) 계정으로 테스트 알림이 발송되어 DB에 저장되었습니다!`);
+    if (result.success) {
+      showToast(`🔔 [텔레그램 발송 성공] (${rawTarget}) 텔레그램으로 실제 메시지가 전송되었습니다!`);
+    } else {
+      showToast(`⚠️ [텔레그램 발송 안내] ${result.message}`);
+    }
+
     setTimeout(() => setTestAlertSent(false), 3000);
   };
 
@@ -1408,7 +1420,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                       <span className="font-bold text-slate-900">텔레그램에서 봇 검색</span>
                     </div>
                     <p className="text-slate-600 leading-relaxed text-[11px]">
-                      텔레그램 앱 검색창에 <code className="bg-sky-100 text-sky-800 px-1 py-0.5 rounded font-mono font-bold">@youth_compass_bot</code> 입력
+                      텔레그램 앱 검색창에 <code className="bg-sky-100 text-sky-800 px-1 py-0.5 rounded font-mono font-bold">@youth_alarm_bot</code> 입력
                     </p>
                     <div className="flex gap-2 pt-1">
                       <button
@@ -1440,7 +1452,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                       <span className="font-bold text-slate-900">나의 Chat ID 확인</span>
                     </div>
                     <p className="text-slate-600 leading-relaxed text-[11px]">
-                      봇이 자동으로 회신해주는 본인 고유의 <strong className="text-teal-700">Chat ID (예: 123456789)</strong> 확인
+                      텔레그램에서 <strong className="text-teal-700">@userinfobot</strong> 검색 후 시작하면 회신되는 고유 숫자 <strong className="text-teal-700">Id (예: 123456789)</strong> 확인
                     </p>
                   </div>
 
@@ -1451,7 +1463,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                       <span className="font-bold text-slate-900">프로필에 입력 &amp; 저장</span>
                     </div>
                     <p className="text-slate-600 leading-relaxed text-[11px]">
-                      확인한 Chat ID를 텔레그램 ID 입력란에 입력 후 <strong className="text-amber-700">[설정 저장]</strong> 클릭
+                      확인한 Chat ID(숫자)를 텔레그램 ID 입력란에 입력 후 <strong className="text-amber-700">[설정 저장]</strong> 클릭
                     </p>
                   </div>
                 </div>
@@ -1464,8 +1476,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                     🔔
                   </div>
                   <div>
-                    <span className="text-xs font-bold text-slate-800">알림 연동 테스트</span>
-                    <p className="text-[11px] text-slate-500">정상적으로 알림이 수신되는지 가상 테스트를 진행합니다.</p>
+                    <span className="text-xs font-bold text-slate-800">실시간 알림 연동 테스트</span>
+                    <p className="text-[11px] text-slate-500">내 텔레그램 앱으로 실제 테스트 알림이 오는지 즉시 발송해봅니다.</p>
                   </div>
                 </div>
                 <button
@@ -1473,7 +1485,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
                   onClick={handleSendTestTelegramAlert}
                   className="px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer whitespace-nowrap"
                 >
-                  {testAlertSent ? '발송 완료 ✅' : '테스트 알림 발송'}
+                  {testAlertSent ? '발송 시도 중...' : '테스트 알림 발송'}
                 </button>
               </div>
             </div>
@@ -1481,11 +1493,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onNavigate }) => {
             {/* Modal Footer */}
             <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-3">
               <span className="text-xs text-slate-500">
-                문의: 청년나침반 봇 고객센터
+                문의: 청년나침반 알림봇
               </span>
               <div className="flex items-center gap-2">
                 <a
-                  href="https://t.me/youth_compass_bot"
+                  href="https://t.me/youth_alarm_bot"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="px-4 py-2 rounded-xl bg-[#229ED9] hover:bg-[#1e8cc0] text-white text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm shadow-sky-200 cursor-pointer"

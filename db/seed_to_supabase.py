@@ -9,11 +9,19 @@ Supabase 'policies' 테이블로 일괄 업로드(Upsert)합니다.
 """
 
 import os
+import sys
 import re
 import json
 import glob
+from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
+
+if sys.stdout.encoding != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 
 # 루트 .env 로드
 root_env = Path(__file__).resolve().parent.parent / ".env"
@@ -35,35 +43,40 @@ def parse_age(age_str: str):
 
 def normalize_policy(item: dict) -> dict:
     """크롤링 JSON / Mock JSON 항목을 DB policies 테이블 규격에 맞게 변환"""
-    cat = item.get("category", "주거")
+    p_id = str(item.get("id") or item.get("policy_id") or item.get("plcyNo") or "").strip()
+    title = str(item.get("title") or item.get("policy_name") or item.get("plcyNm") or "제목 없음").strip()
+
+    cat = item.get("category") or item.get("lclsfNm") or "주거"
     if ">" in cat:
-        # '교육･직업훈련 > 미래역량강화' -> '교육·직업훈련'
         main_cat = cat.split(">")[0].strip().replace("･", "·")
     else:
         main_cat = cat.strip().replace("･", "·")
 
     min_age, max_age = parse_age(item.get("target_age", ""))
     
-    summary = item.get("summary") or item.get("benefit_summary") or item.get("title") or ""
-    details = item.get("support_content") or item.get("benefit_details") or summary
+    summary = item.get("summary") or item.get("benefit_summary") or item.get("policy_summary_3lines") or item.get("plcyExplnCn") or title
+    details = item.get("support_content") or item.get("benefit_details") or item.get("plcySprtCn") or summary
 
+    now_iso = datetime.utcnow().isoformat()
     return {
-        "id": item.get("id"),
-        "title": item.get("title", ""),
-        "organization": item.get("organization", "정부부처/지자체"),
-        "category": main_cat,
-        "status": item.get("status", "상시모집"),
+        "id": p_id[:50],
+        "title": title[:255],
+        "organization": (item.get("organization") or item.get("sprvsnInstCdNm") or "정부부처/지자체")[:150],
+        "category": main_cat[:50],
+        "status": (item.get("status") or "상시모집")[:30],
         "benefit_summary": summary[:500],
         "benefit_details": details,
-        "target_age": item.get("target_age") or f"만 {min_age}세 ~ {max_age}세",
+        "target_age": (item.get("target_age") or f"만 {min_age}세 ~ {max_age}세")[:50],
         "min_age": min_age,
         "max_age": max_age,
-        "income_condition": item.get("income_condition") or item.get("target_condition") or "제한없음",
-        "employment_condition": item.get("employment_condition", "제한없음"),
-        "residence_condition": item.get("residence_condition", "전국"),
-        "application_url": item.get("apply_url") or item.get("application_url") or "https://www.youthcenter.go.kr",
-        "contact": item.get("contact", "고객센터 문의"),
+        "income_condition": (item.get("income_condition") or item.get("target_condition") or "제한없음")[:150],
+        "employment_condition": (item.get("employment_condition") or "제한없음")[:100],
+        "residence_condition": (item.get("residence_condition") or "전국")[:255],
+        "application_url": item.get("apply_url") or item.get("application_url") or item.get("aplyUrlAddr") or "https://www.youthcenter.go.kr",
+        "contact": (item.get("contact") or "고객센터 문의")[:100],
         "view_count": item.get("view_count", 0),
+        "created_at": item.get("created_at") or now_iso,
+        "updated_at": now_iso
     }
 
 def fetch_all_existing_policies(supabase) -> dict:
@@ -124,12 +137,21 @@ def seed():
         return
 
     db_dir = Path(__file__).resolve().parent
+    root_dir = db_dir.parent
+    backend_data_dir = root_dir / "backend" / "data"
     
-    # 크롤링된 실데이터 JSON 찾기
-    crawled_files = list(db_dir.glob("*.json"))
+    # 크롤링된 실데이터 JSON 찾기 (가장 최신 파일 우선)
+    candidate_files = []
+    if backend_data_dir.exists():
+        candidate_files.extend(backend_data_dir.glob("*.json"))
+    candidate_files.extend(db_dir.glob("*.json"))
+
+    # 최신 수정 시간 순으로 정렬
+    candidate_files = sorted(candidate_files, key=lambda p: p.stat().st_mtime, reverse=True)
+    
     target_file = None
-    if crawled_files:
-        target_file = crawled_files[0]
+    if candidate_files:
+        target_file = candidate_files[0]
     else:
         target_file = db_dir / "seeds" / "mock_policies.json"
 
@@ -137,7 +159,7 @@ def seed():
         print(f"❌ 시드 파일이 없습니다: {db_dir}")
         return
 
-    print(f"📂 데이터 소스 파일: {target_file.name}")
+    print(f"📂 데이터 소스 파일: {target_file.name} ({target_file.parent.name})")
     with open(target_file, "r", encoding="utf-8") as f:
         raw_items = json.load(f)
 
@@ -145,7 +167,10 @@ def seed():
     existing_map = fetch_all_existing_policies(supabase)
     print(f"   📊 현재 DB에 존재하는 정책 수: {len(existing_map)}건")
 
-    normalized_items = [normalize_policy(item) for item in raw_items if item.get("id")]
+    normalized_items = [
+        normalize_policy(item) for item in raw_items 
+        if (item.get("id") or item.get("policy_id") or item.get("plcyNo"))
+    ]
     print(f"🚀 총 {len(normalized_items)}개의 정책 데이터를 분석하여 [1. 신규 등록] 및 [2. 변경 수정]을 진행합니다...")
 
     to_insert = []
